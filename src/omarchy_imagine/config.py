@@ -49,8 +49,21 @@ MIN_DURATION_SEC = 1
 MAX_DURATION_SEC = 15
 DEFAULT_DURATION_SEC = 8
 
+# Director brief. Shot count is the nearest count of ~8s clips, clamped so a
+# plan stays cheap. 8 shots × 15s is the long end; two clips is the short end.
+MIN_PLAN_TARGET_SEC = 8
+MAX_PLAN_TARGET_SEC = 120
+MIN_PLAN_SHOTS = 2
+MAX_PLAN_SHOTS = 8
+PREFERRED_SHOT_SEC = 8
+
+# Chat completions model for director-brief expansion. Imagine stills and video
+# stay on IMAGE_MODEL and VIDEO_MODEL. Override with XAI_TEXT_MODEL.
+TEXT_MODEL = "grok-4.6"
+
 DEFAULT_VIDEO_POLL_SEC = 5.0
 DEFAULT_VIDEO_TIMEOUT_SEC = 600.0
+DEFAULT_TEXT_TIMEOUT_SEC = 120.0
 
 
 def image_resolution_for(video_resolution: str) -> str:

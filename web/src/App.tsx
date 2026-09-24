@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
-import { createPack, downloadEpisode, fetchHealth, fetchJobs, fillPack, runPack } from "./api";
+import { createPack, downloadEpisode, fetchHealth, fetchJobs, fillPack, planPack, runPack } from "./api";
 import { examplePack } from "./example";
+import { DURATION_PRESETS, MAX_PLAN_TARGET_SEC, MIN_PLAN_TARGET_SEC, planEstimate } from "./planMath";
 import { ASPECTS, GATES, RESOLUTIONS, type Health, type Job, type PackDraft, type ShotDraft } from "./types";
+
+type Mode = "simple" | "advanced";
 
 function emptyShot(id: string, startState = ""): ShotDraft {
   return {
@@ -104,7 +107,13 @@ export function App() {
   const [packId, setPackId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [activity, setActivity] = useState<"plan" | "fill" | "run" | null>(null);
+  const busy = activity !== null;
+  const [mode, setMode] = useState<Mode>("simple");
+  const [planned, setPlanned] = useState(false);
+  const [briefPrompt, setBriefPrompt] = useState("");
+  const [briefTitle, setBriefTitle] = useState("");
+  const [targetSec, setTargetSec] = useState(32);
 
   useEffect(() => {
     let cancelled = false;
@@ -152,6 +161,8 @@ export function App() {
 
   const latest = jobs[0] ?? null;
   const running = latest?.status === "queued" || latest?.status === "running";
+  const estimate = planEstimate(targetSec);
+  const showEditor = mode === "advanced" || planned;
 
   function updateShot(index: number, patch: Partial<ShotDraft>) {
     setDraft((current) => ({
@@ -196,24 +207,61 @@ export function App() {
     return filled;
   }
 
+  function selectMode(next: Mode) {
+    setMode(next);
+    if (next === "simple" && draft.shots.some((shot) => shot.prompt_still.trim())) {
+      setPlanned(true);
+    }
+  }
+
+  async function onPlan() {
+    const prompt = briefPrompt.trim();
+    if (!prompt) {
+      setError("Add a story prompt before planning.");
+      return;
+    }
+    if (!planEstimate(targetSec)) {
+      setError(`Length must be between ${MIN_PLAN_TARGET_SEC} and ${MAX_PLAN_TARGET_SEC} seconds.`);
+      return;
+    }
+    setActivity("plan");
+    setError(null);
+    try {
+      const title = briefTitle.trim();
+      const filled = await planPack({
+        prompt,
+        target_duration_sec: targetSec,
+        aspect_ratio: draft.aspect_ratio,
+        resolution: draft.resolution,
+        ...(title ? { title } : {}),
+      });
+      setDraft(filled);
+      setPlanned(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not plan the pack");
+    } finally {
+      setActivity(null);
+    }
+  }
+
   async function onFill() {
     if (!canDescribe(draft)) {
       setError("Add a title or logline before filling blanks.");
       return;
     }
-    setBusy(true);
+    setActivity("fill");
     setError(null);
     try {
       await fillFromDescription(draft);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not fill blanks");
     } finally {
-      setBusy(false);
+      setActivity(null);
     }
   }
 
   async function onRun() {
-    setBusy(true);
+    setActivity("run");
     setError(null);
     try {
       let current = draft;
@@ -232,7 +280,7 @@ export function App() {
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Run failed");
     } finally {
-      setBusy(false);
+      setActivity(null);
     }
   }
 
@@ -255,23 +303,41 @@ export function App() {
           <p className="eyebrow">SMF Works</p>
           <h1>Omarchy Grok Imagine</h1>
           <p className="lede">
-            Write a short pack. Imagine makes the stills and clips. ffmpeg stitches the episode.
+            Describe the story and how long it should run. Plan writes the shots. Imagine makes the
+            stills and clips. ffmpeg stitches the episode.
           </p>
         </div>
       </header>
+
+      <div className="modes" role="tablist" aria-label="Pack editor mode">
+        <button
+          type="button"
+          className={mode === "simple" ? "active" : ""}
+          onClick={() => selectMode("simple")}
+        >
+          Simple
+        </button>
+        <button
+          type="button"
+          className={mode === "advanced" ? "active" : ""}
+          onClick={() => selectMode("advanced")}
+        >
+          Advanced
+        </button>
+      </div>
 
       {healthError ? <p className="banner error">{healthError}</p> : null}
       {health ? (
         <p className="banner">
           {health.imagine_configured ? (
             <>
-              <strong>Imagine key is set.</strong> A run will call {health.image_model} and{" "}
-              {health.video_model}.
+              <strong>Imagine key is set.</strong> Plan calls the text model. A run calls{" "}
+              {health.image_model} and {health.video_model}.
             </>
           ) : (
             <>
-              <strong>No XAI_API_KEY.</strong> Run is a dry-run. Status stays <code>stub</code> and
-              every gate stays false.
+              <strong>No XAI_API_KEY.</strong> Plan stays on this machine. Run is a dry-run. Status
+              stays <code>stub</code> and every gate stays false.
             </>
           )}{" "}
           Continuity: {health.continuity === "last_frame_edit" ? "last-frame edit" : "prose regenerate"}.
@@ -279,8 +345,110 @@ export function App() {
       ) : null}
       {error ? <p className="banner error">{error}</p> : null}
 
+      {mode === "simple" ? (
+        <section className="panel">
+          <h2>Director brief</h2>
+          <p className="note">
+            One story and an overall length. Plan expands that into shots you can edit. Planning is
+            text only. Honesty gates stay false until Imagine runs.
+          </p>
+          <label className="field">
+            <span>Story</span>
+            <textarea
+              id="story-prompt"
+              className="story"
+              value={briefPrompt}
+              onChange={(event) => setBriefPrompt(event.target.value)}
+              placeholder="A fisher leaves the dock as the fog lifts, and the morning opens onto calm water."
+            />
+          </label>
+          <label className="field">
+            <span>Title (optional)</span>
+            <input
+              value={briefTitle}
+              onChange={(event) => setBriefTitle(event.target.value)}
+              placeholder="Harbor dawn"
+            />
+          </label>
+          <label className="field">
+            <span>Length (seconds)</span>
+            <input
+              type="number"
+              min={MIN_PLAN_TARGET_SEC}
+              max={MAX_PLAN_TARGET_SEC}
+              value={targetSec}
+              onChange={(event) => setTargetSec(Number(event.target.value))}
+            />
+          </label>
+          <div className="presets" aria-label="Length presets">
+            {DURATION_PRESETS.map((seconds) => (
+              <button
+                key={seconds}
+                type="button"
+                className={targetSec === seconds ? "active" : ""}
+                onClick={() => setTargetSec(seconds)}
+              >
+                {seconds}s
+              </button>
+            ))}
+          </div>
+          <div className="grid">
+            <label className="field">
+              <span>Aspect</span>
+              <select
+                value={draft.aspect_ratio}
+                onChange={(event) => setDraft({ ...draft, aspect_ratio: event.target.value })}
+              >
+                {ASPECTS.map((aspect) => (
+                  <option key={aspect}>{aspect}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Resolution</span>
+              <select
+                value={draft.resolution}
+                onChange={(event) => setDraft({ ...draft, resolution: event.target.value })}
+              >
+                {RESOLUTIONS.map((resolution) => (
+                  <option key={resolution}>{resolution}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {estimate ? (
+            <p className="note">
+              About {estimate.count} shots ({estimate.durations.join("s + ")}s). Planning is text
+              only. Honesty gates stay false until Imagine runs.
+            </p>
+          ) : (
+            <p className="note">
+              Length must be between {MIN_PLAN_TARGET_SEC} and {MAX_PLAN_TARGET_SEC} seconds.
+            </p>
+          )}
+          <div className="actions">
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void onPlan()}
+              disabled={busy || running || !estimate}
+            >
+              {activity === "plan" ? "Planning…" : "Plan"}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {showEditor ? (
       <section className="panel">
-        <h2>Pack</h2>
+        <h2>{mode === "simple" ? "Review" : "Pack"}</h2>
+        {mode === "simple" ? (
+          <p className="note">
+            {draft.shots.length} shots, {draft.shots.reduce((sum, shot) => sum + shot.duration_sec, 0)}{" "}
+            seconds. Edit anything, then Run. This draft has no media yet. Honesty gates stay false
+            until Imagine runs.
+          </p>
+        ) : null}
         <label className="field">
           <span>Title</span>
           <input
@@ -320,14 +488,17 @@ export function App() {
           </label>
         </div>
       </section>
+      ) : null}
 
+      {showEditor ? (
       <section className="panel">
         <h2>Shots</h2>
         <p className="note">
           When both are set, a shot&apos;s start state must match the previous shot&apos;s end state.
-          Duration is 1–15 seconds. Default is 8. Fill blanks writes empty still prompts, motion
-          prompts, and a locked start/end chain from the title and logline. Text you already typed
-          stays. Run does the same fill when any of those fields are still blank.
+          Duration is 1–15 seconds. Default is 8.
+          {mode === "advanced"
+            ? " Fill blanks writes empty still prompts, motion prompts, and a locked start/end chain from the title and logline. Text you already typed stays. Run does the same fill when any of those fields are still blank."
+            : " Run fills any field that is still blank, then creates the pack and starts the job."}
         </p>
         {draft.shots.map((shot, index) => (
           <article className="shot" key={`${shot.id}-${index}`}>
@@ -400,17 +571,22 @@ export function App() {
           <button type="button" onClick={addShot} disabled={busy}>
             Add shot
           </button>
-          <button type="button" onClick={() => setDraft(examplePack)} disabled={busy}>
-            Load example
-          </button>
-          <button type="button" onClick={() => void onFill()} disabled={busy || running}>
-            Fill blanks from logline
-          </button>
+          {mode === "advanced" ? (
+            <>
+              <button type="button" onClick={() => setDraft(examplePack)} disabled={busy}>
+                Load example
+              </button>
+              <button type="button" onClick={() => void onFill()} disabled={busy || running}>
+                Fill blanks from logline
+              </button>
+            </>
+          ) : null}
           <button type="button" className="primary" onClick={() => void onRun()} disabled={busy || running}>
-            {busy ? "Sending…" : "Run"}
+            {activity === "run" ? "Sending…" : "Run"}
           </button>
         </div>
       </section>
+      ) : null}
 
       <section className="panel">
         <h2>Job</h2>

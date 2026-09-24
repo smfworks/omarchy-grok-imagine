@@ -94,6 +94,21 @@ curl -s -X POST http://127.0.0.1:8010/api/packs/fill \
 
 Send the response body to `POST /api/packs` to save it. A continuity mismatch that is already present on both sides is `422`; the fill does not overwrite either side.
 
+### Director brief
+
+`POST /api/packs/plan` expands one story prompt and a target length into a full pack draft. It does not save a pack, does not call Imagine, and does not add media URLs. Honesty gates stay false until a later run.
+
+`target_duration_sec` is an integer from 8 to 120. Outside that range the route is `422`. Shot count is the nearest number of ~8 second clips, halves round up, then clamped to 2–8. Each clip is 1–15 seconds and the durations sum to the target. From 12 through 80 seconds every clip is 6–10 seconds.
+
+When `XAI_API_KEY` is set, prose comes from `grok-4.6` via `POST /v1/chat/completions` with a strict JSON schema. The server validates that JSON into the pack model, softens violent wording the same way a moderation retry does, and overwrites durations and the start/end chain. Without a key, the fill heuristic builds the same shot count, durations, and continuity chain and does not call the network. Either response is a valid `POST /api/packs` body.
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/api/packs/plan \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"A fisher leaves the dock as the fog lifts.","target_duration_sec":24,"aspect_ratio":"16:9","resolution":"720p"}'
+```
+
 ## 2. Run
 
 ```bash

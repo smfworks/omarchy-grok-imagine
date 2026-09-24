@@ -24,6 +24,15 @@ curl -s -X POST http://127.0.0.1:8010/api/packs/fill \
   -d '{"title":"Harbor dawn","logline":"Fog lifts.","shot_count":2}'
 ```
 
+Director brief (`POST /api/packs/plan`) when you have one story prompt and a target length in seconds. The response is a full draft (title, logline, shots, durations, chained start/end states), not a saved pack. `target_duration_sec` must be from 8 to 120 or the route is `422`. Shot count is about one clip per 8 seconds, at least 2 and at most 8, and the durations sum to the target. With `XAI_API_KEY` set, a text model writes the prose. Without a key, the fill heuristic does, and no Imagine call is made. Post that JSON to `POST /api/packs` when you want to save it. Gates stay false until you run.
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/api/packs/plan \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"A fisher leaves the dock as the fog lifts.","target_duration_sec":24}'
+```
+
 Run (`POST /api/packs/$PACK_ID/run`). The body comes back with `status: queued`. Poll until the newest job is `stub`, `done`, or `error`:
 
 ```bash

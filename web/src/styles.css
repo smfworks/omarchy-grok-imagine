@@ -272,6 +272,33 @@ button:disabled {
   margin-bottom: 12px;
 }
 
+.modes,
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.modes {
+  margin-bottom: 16px;
+}
+
+.presets {
+  margin-bottom: 12px;
+}
+
+.modes button.active,
+.presets button.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+  font-weight: 700;
+}
+
+textarea.story {
+  min-height: 120px;
+}
+
 footer {
   color: var(--muted);
   font-size: 0.85rem;

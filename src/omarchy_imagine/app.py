@@ -16,12 +16,28 @@ from omarchy_imagine.ffmpeg_util import ffmpeg_path
 from omarchy_imagine.fill import FillError, FillIn, fill_pack
 from omarchy_imagine.imagine import ImagineClient
 from omarchy_imagine.pipeline import run_pack_job
+from omarchy_imagine.plan import (
+    PlanError,
+    PlanIn,
+    PlanUpstreamError,
+    TextPlanner,
+    XAITextPlanner,
+    plan_pack,
+)
 from omarchy_imagine.schema import JobsOut, PackIn, PackOut, RunOut
 
 
 def default_imagine_client_factory() -> ImagineClient:
     api_key = os.environ.get("XAI_API_KEY", "").strip()
     return ImagineClient(api_key)
+
+
+def default_text_planner_factory() -> TextPlanner | None:
+    """Text model for director briefs. None when no key is set, so planning stays local."""
+    api_key = os.environ.get("XAI_API_KEY", "").strip()
+    if not api_key:
+        return None
+    return XAITextPlanner(api_key)
 
 
 def _bearer(authorization: str | None = Header(default=None)) -> None:
@@ -50,6 +66,7 @@ def create_app() -> FastAPI:
     )
     app.state.store = store
     app.state.imagine_client_factory = default_imagine_client_factory
+    app.state.text_planner_factory = default_text_planner_factory
 
     @app.get("/")
     def root() -> dict[str, str]:
@@ -83,6 +100,27 @@ def create_app() -> FastAPI:
             return fill_pack(body)
         except FillError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/packs/plan", response_model=PackIn)
+    def plan_pack_route(body: PlanIn, _: None = Depends(_bearer)) -> PackIn:
+        """Expand one story prompt and a target length into a pack draft.
+
+        Does not persist a pack, call Imagine, or invent media URLs.
+        Shot count and durations come from the target length. With
+        ``XAI_API_KEY`` set, prose comes from the text model. Without a key,
+        the fill heuristic writes the same chain.
+        """
+        planner = app.state.text_planner_factory()
+        try:
+            return plan_pack(body, planner=planner)
+        except PlanUpstreamError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except PlanError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            close = getattr(planner, "close", None)
+            if close is not None:
+                close()
 
     @app.post("/api/packs", response_model=PackOut, status_code=201)
     def create_pack(pack: PackIn, _: None = Depends(_bearer)) -> dict:
