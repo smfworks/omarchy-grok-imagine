@@ -21,7 +21,8 @@ class JobInProgress(Exception):
 
 
 def utcnow() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    # Microseconds keep same-second jobs in order. rowid is the tie-break.
+    return datetime.now(UTC).isoformat()
 
 
 def blank_shot_record(shot_id: str) -> dict[str, Any]:
@@ -139,7 +140,9 @@ class Store:
 
     def list_packs(self) -> list[dict[str, Any]]:
         with self._lock, self._connect() as conn:
-            rows = conn.execute("SELECT * FROM packs ORDER BY created_at DESC, id DESC").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM packs ORDER BY created_at DESC, rowid DESC"
+            ).fetchall()
         return [self._pack_from_row(row) for row in rows]
 
     def get_pack(self, pack_id: str) -> dict[str, Any] | None:
@@ -231,7 +234,7 @@ class Store:
     def list_jobs(self, pack_id: str) -> list[dict[str, Any]]:
         with self._lock, self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM jobs WHERE pack_id = ? ORDER BY created_at DESC, id DESC",
+                "SELECT * FROM jobs WHERE pack_id = ? ORDER BY created_at DESC, rowid DESC",
                 (pack_id,),
             ).fetchall()
         return [self._job_from_row(row) for row in rows]

@@ -211,7 +211,9 @@ def test_last_frame_seed_and_ffmpeg_stitch(client, app, monkeypatch, tmp_path) -
     app.state.imagine_client_factory = refuse
     rerun = client.post(f"/api/packs/{pack_id}/run", headers=AUTH)
     assert rerun.json()["status"] == "stub"
-    assert client.get(f"/api/packs/{pack_id}/episode", headers=AUTH).status_code == 404
+    episode_after = client.get(f"/api/packs/{pack_id}/episode", headers=AUTH)
+    assert episode_after.status_code == 404
     latest = client.get(f"/api/packs/{pack_id}/jobs", headers=AUTH).json()["jobs"][0]
+    assert latest["id"] == rerun.json()["job_id"]
     assert latest["stitched_episode"] is False
     assert latest["episode_path"] is None
