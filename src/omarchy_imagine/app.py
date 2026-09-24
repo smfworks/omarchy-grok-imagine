@@ -37,6 +37,7 @@ from omarchy_imagine.plan import (
     XAITextPlanner,
     plan_pack,
 )
+from omarchy_imagine.preflight import PreflightOut, preflight
 from omarchy_imagine.schema import (
     CastRef,
     EditClipIn,
@@ -151,6 +152,14 @@ def create_app() -> FastAPI:
             close = getattr(planner, "close", None)
             if close is not None:
                 close()
+
+    @app.post("/api/packs/preflight", response_model=PreflightOut)
+    def preflight_pack(pack: PackIn, _: None = Depends(_bearer)) -> dict[str, object]:
+        """Show assembled prompts, issue flags, and call counts.
+
+        Does not persist a pack and does not construct an Imagine client.
+        """
+        return preflight(pack)
 
     @app.post("/api/references", response_model=CastRef, status_code=201)
     def upload_reference(

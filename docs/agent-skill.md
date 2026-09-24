@@ -33,7 +33,16 @@ curl -s -X POST http://127.0.0.1:8010/api/packs/plan \
   -d '{"prompt":"A fisher leaves the dock as the fog lifts.","target_duration_sec":24}'
 ```
 
-Run (`POST /api/packs/$PACK_ID/run`). The body comes back with `status: queued`. Poll until the newest job is `stub`, `done`, or `error`:
+Preflight (`POST /api/packs/preflight`) before you create or run. Send the pack body. The response is the assembled still and motion prompts, `still_mode_expected` (`text_to_image`, `cast_reference`, or `last_frame_edit`), `video_mode`, per-shot issues, and `totals` (`stills`, `videos`, `video_seconds`). `blocking` is true when any issue is `handoff_state`. Warnings (`verb_count`, `camera_conflict`, `banned_cut`, `lock_drift`) and the `r2v_resolution` note do not block. This route does not save the pack and does not construct an Imagine client, with or without `XAI_API_KEY`. Read it before `POST /run`.
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/api/packs/preflight \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Harbor dawn","logline":"Fog lifts.","aspect_ratio":"16:9","resolution":"720p","shots":[{"id":"s01","prompt_still":"A quiet harbor at dawn","prompt_motion":"The boat eases off the dock","duration_sec":8,"end_state":"The boat is offshore.","start_state":""}]}'
+```
+
+Run (`POST /api/packs/$PACK_ID/run`) only after that preflight. The body comes back with `status: queued`. Poll until the newest job is `stub`, `done`, or `error`:
 
 ```bash
 curl -s -X POST "http://127.0.0.1:8010/api/packs/$PACK_ID/run" \

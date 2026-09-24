@@ -131,6 +131,36 @@ curl -s -X POST http://127.0.0.1:8010/api/packs/plan \
 
 The JSON that comes back is a valid `POST /api/packs` body. Shot 2 `start_state` equals shot 1 `end_state`, and the durations sum to 24.
 
+## Preflight
+
+Before a run spends an Imagine call, review the exact prompts and the call count.
+
+`POST /api/packs/preflight` takes the same pack body as `POST /api/packs`. It does not save the pack, does not open an Imagine client, and does not need `XAI_API_KEY`. The same bearer token is required. A stub run is unchanged: with no key, `POST /run` still finishes as `stub` and leaves every honesty gate false.
+
+The response lists each shot's assembled still prompt and motion prompt (the same builders the pipeline uses), the still mode (`text_to_image`, `cast_reference`, or `last_frame_edit`), and the video mode. When ffmpeg is available, every shot after the first is seeded from the previous clip's last frame, and the still prompt includes `seed frame is the previous clip's last frame at run time`. Totals are still calls, video calls, and seconds of video, for example `4 stills, 4 videos, 32 s of video`. Prices are not estimated.
+
+Issues use `block`, `warn`, or `info`:
+
+| Code | Severity | When |
+| --- | --- | --- |
+| `verb_count` | warn | More than one action verb from the CLIP_BRIDGE verb bank is in `prompt_motion` |
+| `camera_conflict` | warn | The motion text and `camera.move` name opposing moves (push against pull, a reversed screen direction, or a move the card does not match) |
+| `banned_cut` | warn | Editorial cut language such as `cut to`, `smash cut`, `dissolve`, or `[shot 2]` |
+| `handoff_state` | block | Shot N `start_state` is not shot N-1 `end_state` after strip |
+| `lock_drift` | warn | A look-bible or cast anchor word is missing from that shot's still prompt |
+| `r2v_resolution` | info | A `1080p` pack will send `reference_to_video` at `720p` |
+
+`blocking` is true when any issue is `block`. Warnings and the resolution note do not block. A continuity mismatch that is already written on both sides is still `422` from the pack schema, the same as create. A one-sided gap is a preflight block, with a message on that shot.
+
+The wizard button is **Review & run** in Simple and Advanced mode. It opens one panel: collapsible prompts, issues colored by severity, and the totals line. **Confirm run** stays disabled while a block is open. Confirm then fills any blank, creates the pack, and starts the job.
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/api/packs/preflight \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Harbor dawn","logline":"Fog lifts.","aspect_ratio":"16:9","resolution":"720p","shots":[{"id":"s01","prompt_still":"A quiet harbor at dawn","prompt_motion":"The boat eases off the dock","duration_sec":8,"end_state":"The boat is offshore.","start_state":""}]}'
+```
+
 ## Moderation retry
 
 Imagine can reject a still or a clip for content moderation. A live video poll does this as HTTP 400 with `Generated video rejected by content moderation.` A finished video can also come back with `respect_moderation: false` and no URL. Image generation and image edit use the same moderation wording on HTTP 400, and a 200 image body can set `respect_moderation` to false. The docs describe that image case as filtered by moderation.
@@ -315,7 +345,7 @@ The full agent flow is in [`.cursor/skills/omarchy-imagine/SKILL.md`](.cursor/sk
 
 ## Drive from Grok Bot
 
-Point Grok Bot, Grok Build, or Cursor at the skill above. It documents the exact HTTP calls against `http://127.0.0.1:8010` with `Bearer local-dev-token`: create a pack, enqueue a run, poll jobs, and download the episode only after `stitched_episode` is true.
+Point Grok Bot, Grok Build, or Cursor at the skill above. It documents the exact HTTP calls against `http://127.0.0.1:8010` with `Bearer local-dev-token`: preflight a pack, create it, enqueue a run, poll jobs, and download the episode only after `stitched_episode` is true. Call preflight before run.
 
 There is also a symlink at `skills/omarchy-imagine/SKILL.md`.
 

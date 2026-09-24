@@ -152,6 +152,31 @@ export const CAMERA_MOVES = [
 export const CAST_ROLES = ["character", "prop", "location"] as const;
 export const VIDEO_MODES = ["image_to_video", "reference_to_video"] as const;
 
+export type PreflightIssue = {
+  code: string;
+  severity: "block" | "warn" | "info";
+  message: string;
+};
+
+export type PreflightShot = {
+  id: string;
+  still_prompt: string;
+  motion_prompt: string;
+  still_mode_expected: string;
+  video_mode: string;
+  issues: PreflightIssue[];
+};
+
+export type PreflightResult = {
+  shots: PreflightShot[];
+  totals: {
+    stills: number;
+    videos: number;
+    video_seconds: number;
+  };
+  blocking: boolean;
+};
+
 export const GATES = [
   ["called_imagine_still", "Called Imagine still"],
   ["produced_still", "Produced still"],
