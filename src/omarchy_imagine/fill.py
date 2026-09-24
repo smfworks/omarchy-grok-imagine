@@ -20,6 +20,7 @@ import re
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from omarchy_imagine.castref import ensure_cast_names
 from omarchy_imagine.config import (
     ASPECT_RATIOS,
     DEFAULT_DURATION_SEC,
@@ -30,7 +31,9 @@ from omarchy_imagine.config import (
 from omarchy_imagine.schema import (
     BEAT_ROLES,
     STYLE_PRESETS,
+    VIDEO_MODES,
     CameraCard,
+    CastRef,
     LookBible,
     PackIn,
     StoryBeat,
@@ -54,6 +57,9 @@ class ShotFill(BaseModel):
     start_state: str = ""
     beat: str = ""
     camera: CameraCard = Field(default_factory=CameraCard)
+    video_mode: str = "image_to_video"
+    dialogue: str = ""
+    voice_id: str = ""
 
     @field_validator("id", "prompt_still", "prompt_motion", "end_state", "start_state")
     @classmethod
@@ -64,6 +70,19 @@ class ShotFill(BaseModel):
     @classmethod
     def beat_role(cls, value: str) -> str:
         return coerce_token(value, BEAT_ROLES, {}, "beat", allow_empty=True)
+
+    @field_validator("video_mode")
+    @classmethod
+    def video_mode_value(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            return "image_to_video"
+        return coerce_token(cleaned, VIDEO_MODES, {}, "video_mode", allow_empty=False)
+
+    @field_validator("dialogue", "voice_id")
+    @classmethod
+    def optional_line(cls, value: str) -> str:
+        return value.strip()
 
     @field_validator("duration_sec")
     @classmethod
@@ -86,6 +105,8 @@ class FillIn(BaseModel):
     look_bible: LookBible | None = None
     style_preset: str = ""
     beat_map: list[StoryBeat] = Field(default_factory=list)
+    cast: list[CastRef] = Field(default_factory=list)
+    music_path: str = ""
     shots: list[ShotFill] | None = None
 
     @field_validator("title", "logline")
@@ -149,6 +170,10 @@ def fill_pack(body: FillIn) -> PackIn:
     _fill_stills(shots, basis, title)
     _fill_states(shots)
     _fill_motions(shots, logline)
+    cast = [item.model_dump() for item in body.cast]
+    for shot in shots:
+        shot["prompt_still"] = ensure_cast_names(str(shot["prompt_still"]), cast)
+        shot["prompt_motion"] = ensure_cast_names(str(shot["prompt_motion"]), cast)
 
     draft = {
         "title": title,
@@ -158,6 +183,8 @@ def fill_pack(body: FillIn) -> PackIn:
         "look_bible": _look_bible(body, title, logline),
         "style_preset": body.style_preset,
         "beat_map": [item.model_dump() for item in body.beat_map],
+        "cast": cast,
+        "music_path": body.music_path.strip(),
         "shots": shots,
     }
     try:
@@ -263,6 +290,9 @@ def _shot_dict(shot: ShotFill) -> dict[str, object]:
         "start_state": shot.start_state,
         "beat": shot.beat,
         "camera": shot.camera.model_dump(),
+        "video_mode": shot.video_mode or "image_to_video",
+        "dialogue": shot.dialogue,
+        "voice_id": shot.voice_id,
     }
 
 

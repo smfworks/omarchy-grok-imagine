@@ -43,6 +43,10 @@ def ffmpeg_path() -> str | None:
     return shutil.which("ffmpeg")
 
 
+def ffprobe_path() -> str | None:
+    return shutil.which("ffprobe")
+
+
 def require_ffmpeg() -> str:
     binary = ffmpeg_path()
     if not binary:
@@ -176,14 +180,72 @@ def match_grade(clip_paths: list[Path]) -> GradeMatch:
     return GradeMatch(graded, True, note)
 
 
+def has_audio_stream(path: Path) -> bool:
+    """True only when ffprobe reports an audio stream. A missing probe is false."""
+    binary = ffprobe_path()
+    if not binary or not path.is_file() or path.stat().st_size == 0:
+        return False
+    result = subprocess.run(
+        [
+            binary,
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "csv=p=0",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return "audio" in result.stdout
+
+
+def media_duration(path: Path) -> float | None:
+    binary = ffprobe_path()
+    if not binary or not path.is_file():
+        return None
+    result = subprocess.run(
+        [
+            binary,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    text = result.stdout.strip()
+    if result.returncode != 0 or not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def stitch_clips(clip_paths: list[Path], episode_path: Path) -> None:
-    """Concat demuxer, hard cuts. Stream copy first, then libx264 if copy fails."""
+    """Concat demuxer, hard cuts. Stream copy first, then libx264 if copy fails.
+
+    When some clips have audio and some do not, the silent ones gain a silent
+    track first so concat keeps the tracks that exist. An all-silent list stays
+    silent.
+    """
     if not clip_paths:
         raise FfmpegError("no clips to stitch")
     binary = require_ffmpeg()
     episode_path.parent.mkdir(parents=True, exist_ok=True)
+    aligned = _align_audio(clip_paths, episode_path.parent / "audio-align")
+    want_audio = any(has_audio_stream(path) for path in aligned)
     list_path = episode_path.with_name("concat.txt")
-    list_path.write_text(concat_manifest(clip_paths), encoding="utf-8")
+    list_path.write_text(concat_manifest(aligned), encoding="utf-8")
     copy_cmd = [
         binary,
         "-y",
@@ -214,14 +276,86 @@ def stitch_clips(clip_paths: list[Path], episode_path: Path) -> None:
             "libx264",
             "-pix_fmt",
             "yuv420p",
-            "-movflags",
-            "+faststart",
-            str(episode_path),
         ]
+        if want_audio:
+            encode_cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+        encode_cmd.extend(["-movflags", "+faststart", str(episode_path)])
         encoded = subprocess.run(encode_cmd, capture_output=True, text=True)
         if encoded.returncode != 0 or not _nonempty(episode_path):
             detail = (encoded.stderr or copied.stderr or "ffmpeg produced no episode").strip()
             raise FfmpegError(detail[-2000:])
+
+
+def mix_music_bed(episode: Path, music: Path) -> str:
+    """Mix a local music file under ``episode`` and replace it.
+
+    Ducking uses ``sidechaincompress`` when that filter exists. Otherwise the
+    bed is a fixed low level. Either way the bed fades out. The source episode
+    is left untouched when the mix fails.
+    """
+    if not episode.is_file():
+        raise FfmpegError("Episode file is not on disk.")
+    if not music.is_file() or music.stat().st_size == 0:
+        raise FfmpegError("Music file is not on disk.")
+    binary = require_ffmpeg()
+    duration = media_duration(episode) or 0.0
+    fade = min(1.5, max(0.4, duration * 0.12)) if duration else 1.0
+    fade_start = max(0.0, duration - fade) if duration else 0.0
+    names = ffmpeg_filter_names() or set()
+    speech = has_audio_stream(episode)
+    duck = speech and "sidechaincompress" in names and "amix" in names
+    trim = f"atrim=0:{duration:.3f},asetpts=PTS-STARTPTS," if duration else ""
+    fade_filter = f"afade=t=out:st={fade_start:.3f}:d={fade:.3f}"
+    if duck:
+        graph = (
+            f"[1:a]{trim}volume=0.35,{fade_filter}[bed];"
+            "[bed][0:a]sidechaincompress=threshold=0.02:ratio=8:attack=15:release=300[ducked];"
+            "[0:a][ducked]amix=inputs=2:duration=first:dropout_transition=0[a]"
+        )
+        note = "Music bed applied with sidechain ducking and a fade out."
+    elif speech:
+        graph = (
+            f"[1:a]{trim}volume=0.15,{fade_filter}[bed];"
+            "[0:a][bed]amix=inputs=2:duration=first:dropout_transition=0[a]"
+        )
+        note = "Music bed applied at a fixed low level with a fade out."
+    else:
+        graph = f"[1:a]{trim}volume=0.15,{fade_filter}[a]"
+        note = "Music bed applied at a fixed low level with a fade out."
+    dest = episode.with_name("episode.music.mp4")
+    if dest.exists():
+        dest.unlink()
+    cmd = [
+        binary,
+        "-y",
+        "-i",
+        str(episode),
+        "-i",
+        str(music),
+        "-filter_complex",
+        graph,
+        "-map",
+        "0:v",
+        "-map",
+        "[a]",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "160k",
+        "-movflags",
+        "+faststart",
+        str(dest),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 or not _nonempty(dest):
+        if dest.exists():
+            dest.unlink()
+        detail = (result.stderr or "ffmpeg did not mix the music bed").strip()
+        raise FfmpegError(detail[-2000:])
+    dest.replace(episode)
+    return note
 
 
 def _parse_filter_names(text: str) -> set[str]:
@@ -306,25 +440,67 @@ def _apply_eq(src: Path, dest: Path, eq: str) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         dest.unlink()
-    _run(
-        [
-            binary,
-            "-y",
-            "-i",
-            str(src),
-            "-vf",
-            eq,
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-            "-an",
-            str(dest),
-        ],
-        dest,
-    )
+    cmd = [
+        binary,
+        "-y",
+        "-i",
+        str(src),
+        "-vf",
+        eq,
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+    ]
+    if has_audio_stream(src):
+        cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+    else:
+        cmd.append("-an")
+    cmd.append(str(dest))
+    _run(cmd, dest)
+
+
+def _align_audio(clip_paths: list[Path], work: Path) -> list[Path]:
+    flags = [has_audio_stream(path) for path in clip_paths]
+    if not any(flags) or all(flags):
+        return list(clip_paths)
+    binary = require_ffmpeg()
+    work.mkdir(parents=True, exist_ok=True)
+    aligned: list[Path] = []
+    for index, (path, audible) in enumerate(zip(clip_paths, flags, strict=True)):
+        if audible:
+            aligned.append(path)
+            continue
+        dest = work / f"{index:02d}-{path.stem}.mp4"
+        if dest.exists():
+            dest.unlink()
+        result = subprocess.run(
+            [
+                binary,
+                "-y",
+                "-i",
+                str(path),
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-shortest",
+                str(dest),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not _nonempty(dest):
+            detail = (result.stderr or "ffmpeg could not add silent audio").strip()
+            raise FfmpegError(detail[-2000:])
+        aligned.append(dest)
+    return aligned
 
 
 def _clamp(value: float, low: float, high: float) -> float:

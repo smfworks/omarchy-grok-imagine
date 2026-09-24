@@ -27,6 +27,7 @@ from omarchy_imagine.config import (
     DEFAULT_VIDEO_POLL_SEC,
     DEFAULT_VIDEO_TIMEOUT_SEC,
     IMAGE_MODEL,
+    VIDEO_EDIT_MODEL,
     VIDEO_MODEL,
     XAI_API_BASE,
 )
@@ -46,6 +47,11 @@ class ImagineError(Exception):
         self.request_sent = request_sent
         self.request_id = request_id
         self.moderation = moderation
+
+
+def video_data_uri(video: bytes) -> str:
+    encoded = base64.b64encode(video).decode("ascii")
+    return f"data:video/mp4;base64,{encoded}"
 
 
 def data_uri(image: bytes) -> str:
@@ -134,16 +140,37 @@ class ImagineClient:
         response = self._post("/images/generations", body)
         return self._image_bytes(response)
 
-    def edit_still(self, prompt: str, image: bytes, aspect_ratio: str, resolution: str) -> bytes:
-        body = {
+    def edit_still(
+        self,
+        prompt: str,
+        image: bytes,
+        aspect_ratio: str,
+        resolution: str,
+        *,
+        extra_images: list[bytes] | None = None,
+    ) -> bytes:
+        """Edit one image, or up to three when ``extra_images`` is set.
+
+        A single source uses the ``image`` object, which Phase 1 already sends.
+        Several sources use the ``images`` array. The two fields are mutually
+        exclusive on the edits API.
+        """
+        extras = list(extra_images or [])
+        body: dict[str, object] = {
             "model": IMAGE_MODEL,
             "prompt": prompt,
             "aspect_ratio": aspect_ratio,
             "resolution": resolution,
             "n": 1,
             "response_format": "b64_json",
-            "image": {"url": data_uri(image), "type": "image_url"},
         }
+        if extras:
+            sources = [image, *extras]
+            body["images"] = [
+                {"url": data_uri(item), "type": "image_url"} for item in sources
+            ]
+        else:
+            body["image"] = {"url": data_uri(image), "type": "image_url"}
         response = self._post("/images/edits", body)
         return self._image_bytes(response)
 
@@ -164,7 +191,57 @@ class ImagineClient:
             "aspect_ratio": aspect_ratio,
             "resolution": resolution,
         }
-        response = self._post("/videos/generations", body)
+        return self._submit_video("/videos/generations", body)
+
+    def reference_to_video(
+        self,
+        *,
+        prompt: str,
+        images: list[bytes],
+        duration_sec: int,
+        aspect_ratio: str,
+        resolution: str,
+        voice_id: str = "",
+    ) -> tuple[bytes, str]:
+        """Reference-to-video. Does not send ``image`` (that combination is a 400).
+
+        ``resolution`` must already be within the 720p cap. ``voice_id`` is a
+        preset voice on ``reference_audios``, which the docs attach to this mode.
+        """
+        body: dict[str, object] = {
+            "model": VIDEO_MODEL,
+            "prompt": prompt,
+            "duration": duration_sec,
+            "aspect_ratio": aspect_ratio,
+            "resolution": resolution,
+        }
+        if images:
+            body["reference_images"] = [{"url": data_uri(item)} for item in images]
+        if voice_id:
+            body["reference_audios"] = [{"voice_id": voice_id}]
+        return self._submit_video("/videos/generations", body)
+
+    def edit_video(self, *, prompt: str, video: bytes) -> tuple[bytes, str]:
+        """``POST /v1/videos/edits``. Duration and resolution are inherited."""
+        body = {
+            "model": VIDEO_EDIT_MODEL,
+            "prompt": prompt,
+            "video": {"url": video_data_uri(video)},
+        }
+        return self._submit_video("/videos/edits", body)
+
+    def extend_video(self, *, prompt: str, video: bytes, duration_sec: int) -> tuple[bytes, str]:
+        """``POST /v1/videos/extensions``. ``duration_sec`` is the added length."""
+        body = {
+            "model": VIDEO_EDIT_MODEL,
+            "prompt": prompt,
+            "duration": duration_sec,
+            "video": {"url": video_data_uri(video)},
+        }
+        return self._submit_video("/videos/extensions", body)
+
+    def _submit_video(self, path: str, body: dict) -> tuple[bytes, str]:
+        response = self._post(path, body)
         try:
             payload = response.json()
         except json.JSONDecodeError as exc:

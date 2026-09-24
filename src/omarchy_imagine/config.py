@@ -39,6 +39,8 @@ LOCAL_DEV_TOKEN = "local-dev-token"
 XAI_API_BASE = "https://api.x.ai/v1"
 IMAGE_MODEL = "grok-imagine-image-2.0"
 VIDEO_MODEL = "grok-imagine-video-1.5"
+# Edits and extensions in the current REST examples use grok-imagine-video, not 1.5.
+VIDEO_EDIT_MODEL = "grok-imagine-video"
 
 # Intersection of the image and video aspect ratios documented on the REST
 # reference, so one pack value is valid for stills and for image-to-video.
@@ -64,6 +66,32 @@ TEXT_MODEL = "grok-4.6"
 DEFAULT_VIDEO_POLL_SEC = 5.0
 DEFAULT_VIDEO_TIMEOUT_SEC = 600.0
 DEFAULT_TEXT_TIMEOUT_SEC = 120.0
+
+# Image edits accept multiple sources. The Imagine landing page says 3. The
+# multi-image page says 5. Three satisfies both, and it is also the count in
+# the reference-to-video examples.
+MAX_REFERENCE_IMAGES = 3
+MAX_CAST_ENTRIES = 8
+# Video editing keeps the input duration, which the generation page caps at 8.7s.
+EDIT_MAX_INPUT_SEC = 8.7
+EXTEND_MIN_SEC = 2
+EXTEND_MAX_SEC = 10
+MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_UPLOAD_AUDIO_BYTES = 20 * 1024 * 1024
+
+VIDEO_MODES = ("image_to_video", "reference_to_video")
+CAST_ROLES = ("character", "prop", "location")
+
+
+def reference_video_resolution(resolution: str) -> tuple[str, str | None]:
+    """Reference-to-video is capped at 720p. 1080p is sent as 720p with a note."""
+    if resolution == "1080p":
+        return (
+            "720p",
+            "Reference-to-video is capped at 720p on grok-imagine-video-1.5. "
+            "This shot was sent at 720p.",
+        )
+    return resolution, None
 
 
 def image_resolution_for(video_resolution: str) -> str:

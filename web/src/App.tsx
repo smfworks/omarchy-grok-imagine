@@ -1,19 +1,37 @@
 import { useEffect, useState } from "react";
-import { createPack, downloadEpisode, fetchHealth, fetchJobs, fillPack, planPack, runPack } from "./api";
+import {
+  attachMusic,
+  createPack,
+  downloadEpisode,
+  editShot,
+  extendShot,
+  fetchHealth,
+  fetchJobs,
+  fetchReferenceBlob,
+  fillPack,
+  planPack,
+  regenerateShot,
+  runPack,
+  uploadMusic,
+  uploadReference,
+} from "./api";
 import { examplePack } from "./example";
 import { DURATION_PRESETS, MAX_PLAN_TARGET_SEC, MIN_PLAN_TARGET_SEC, planEstimate } from "./planMath";
 import {
   ASPECTS,
   BEAT_ROLES,
+  CAST_ROLES,
   CAMERA_ANGLES,
   CAMERA_MOVES,
   CAMERA_SCALES,
   GATES,
   RESOLUTIONS,
   STYLE_PRESETS,
+  VIDEO_MODES,
   emptyCamera,
   emptyLookBible,
   type CameraCard,
+  type CastRef,
   type Health,
   type Job,
   type LookBible,
@@ -33,6 +51,9 @@ function emptyShot(id: string, startState = ""): ShotDraft {
     start_state: startState,
     beat: "",
     camera: emptyCamera(),
+    video_mode: "image_to_video",
+    dialogue: "",
+    voice_id: "",
   };
 }
 
@@ -117,6 +138,14 @@ function payload(pack: PackDraft): PackDraft {
     beat_map: pack.beat_map
       .map((beat) => ({ role: beat.role.trim(), summary: beat.summary.trim() }))
       .filter((beat) => beat.role),
+    cast: pack.cast.map((item) => ({
+      id: item.id,
+      name: item.name.trim(),
+      role: item.role,
+      markers: item.markers.trim(),
+      image_path: item.image_path,
+    })),
+    music_path: pack.music_path.trim(),
     shots: pack.shots.map((shot) => ({
       id: shot.id.trim(),
       prompt_still: shot.prompt_still.trim(),
@@ -131,8 +160,46 @@ function payload(pack: PackDraft): PackDraft {
         move: shot.camera.move.trim(),
         exit_frame: shot.camera.exit_frame.trim(),
       },
+      video_mode: shot.video_mode || "image_to_video",
+      dialogue: shot.dialogue.trim(),
+      voice_id: shot.video_mode === "reference_to_video" ? shot.voice_id.trim() : "",
     })),
   };
+}
+
+function CastThumb({ item, preview }: { item: CastRef; preview?: string }) {
+  const [url, setUrl] = useState<string | null>(preview ?? null);
+  useEffect(() => {
+    if (preview) {
+      setUrl(preview);
+      return undefined;
+    }
+    let cancelled = false;
+    let objectUrl = "";
+    fetchReferenceBlob(item.id)
+      .then((blob) => {
+        if (cancelled) {
+          return;
+        }
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setUrl(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [item.id, preview]);
+  if (!url) {
+    return <span className="note">No preview</span>;
+  }
+  return <img className="cast-preview" alt={`${item.name} reference`} src={url} />;
 }
 
 export function App() {
@@ -144,6 +211,8 @@ export function App() {
     look_bible: emptyLookBible(),
     style_preset: "",
     beat_map: [],
+    cast: [],
+    music_path: "",
     shots: [emptyShot("s01")],
   });
   const [health, setHealth] = useState<Health | null>(null);
@@ -159,6 +228,15 @@ export function App() {
   const [briefTitle, setBriefTitle] = useState("");
   const [briefStyle, setBriefStyle] = useState("");
   const [targetSec, setTargetSec] = useState(32);
+  const [castName, setCastName] = useState("");
+  const [castRole, setCastRole] = useState("character");
+  const [castMarkers, setCastMarkers] = useState("");
+  const [castFile, setCastFile] = useState<File | null>(null);
+  const [castPreviews, setCastPreviews] = useState<Record<string, string>>({});
+  const [musicLabel, setMusicLabel] = useState("");
+  const [revisePrompt, setRevisePrompt] = useState<Record<string, string>>({});
+  const [extendSec, setExtendSec] = useState<Record<string, number>>({});
+  const [reviseStatus, setReviseStatus] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -280,6 +358,8 @@ export function App() {
         summary: beat.summary ?? "",
       })),
       look_bible: { ...emptyLookBible(), ...(pack.look_bible ?? {}) },
+      cast: pack.cast ?? [],
+      music_path: pack.music_path ?? "",
       shots: pack.shots.map((shot) => ({
         ...emptyShot(shot.id),
         ...shot,
@@ -322,6 +402,8 @@ export function App() {
         resolution: draft.resolution,
         ...(title ? { title } : {}),
         ...(briefStyle ? { style_preset: briefStyle } : {}),
+        ...(draft.cast.length ? { cast: draft.cast } : {}),
+        ...(draft.music_path ? { music_path: draft.music_path } : {}),
       });
       setDraft(adoptPack(filled));
       setPlanned(true);
@@ -381,6 +463,97 @@ export function App() {
       await downloadEpisode(packId);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Download failed");
+    }
+  }
+
+  async function onAddCast() {
+    const name = castName.trim();
+    if (!name) {
+      setError("Cast needs a name.");
+      return;
+    }
+    if (!castFile) {
+      setError("Cast needs a PNG, JPEG, or WebP image.");
+      return;
+    }
+    setError(null);
+    try {
+      const entry = await uploadReference(castFile, name, castRole, castMarkers.trim());
+      const preview = URL.createObjectURL(castFile);
+      setCastPreviews((current) => ({ ...current, [entry.id]: preview }));
+      setDraft((current) => ({ ...current, cast: [...current.cast, entry] }));
+      setCastName("");
+      setCastMarkers("");
+      setCastFile(null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not upload the reference");
+    }
+  }
+
+  function removeCast(id: string) {
+    setDraft((current) => ({ ...current, cast: current.cast.filter((item) => item.id !== id) }));
+    setCastPreviews((current) => {
+      const next = { ...current };
+      const url = next[id];
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+      delete next[id];
+      return next;
+    });
+  }
+
+  async function onMusicFile(file: File | null) {
+    if (!file) {
+      return;
+    }
+    setError(null);
+    try {
+      if (packId && latest && latest.status === "done" && latest.stitched_episode) {
+        const saved = await attachMusic(packId, file);
+        setDraft((current) => ({ ...current, music_path: saved.music_path }));
+        setMusicLabel(file.name);
+        const jobs = await fetchJobs(packId);
+        setJobs(jobs);
+        return;
+      }
+      const saved = await uploadMusic(file);
+      setDraft((current) => ({ ...current, music_path: saved.music_path }));
+      setMusicLabel(file.name);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not upload the music bed");
+    }
+  }
+
+  async function onRevise(shotId: string, action: "regenerate" | "edit" | "extend") {
+    if (!packId || !latest) {
+      return;
+    }
+    const prompt = (revisePrompt[shotId] ?? "").trim();
+    if (action !== "regenerate" && !prompt) {
+      setReviseStatus((current) => ({ ...current, [shotId]: "Add a prompt first." }));
+      return;
+    }
+    setReviseStatus((current) => ({ ...current, [shotId]: `${action}…` }));
+    setError(null);
+    try {
+      let job: Job;
+      if (action === "regenerate") {
+        job = await regenerateShot(packId, latest.id, shotId, "", prompt);
+      } else if (action === "edit") {
+        job = await editShot(packId, latest.id, shotId, prompt);
+      } else {
+        job = await extendShot(packId, latest.id, shotId, prompt, extendSec[shotId] ?? 4);
+      }
+      setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+      setReviseStatus((current) => ({
+        ...current,
+        [shotId]: job.status === "error" ? job.error || job.message || "Failed" : job.status,
+      }));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Revise failed";
+      setReviseStatus((current) => ({ ...current, [shotId]: message }));
+      setError(message);
     }
   }
 
@@ -589,6 +762,82 @@ export function App() {
       </section>
       ) : null}
 
+      <section className="panel" data-testid="cast-panel">
+        <h2>Cast</h2>
+        <p className="note">
+          Upload a local reference for a character, prop, or location. The file stays in the
+          data directory. Stills use up to three of these images. Reference-to-video can use
+          them too, at 720p.
+        </p>
+        <div className="grid">
+          <label className="field">
+            <span>Name</span>
+            <input value={castName} onChange={(event) => setCastName(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Role</span>
+            <select value={castRole} onChange={(event) => setCastRole(event.target.value)}>
+              {CAST_ROLES.map((role) => (
+                <option key={role} value={role}>
+                  {tokenLabel(role)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label className="field">
+          <span>Identity markers</span>
+          <input
+            value={castMarkers}
+            onChange={(event) => setCastMarkers(event.target.value)}
+            placeholder="Same face, grey coat, scar on the left brow"
+          />
+        </label>
+        <label className="field">
+          <span>Reference image</span>
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(event) => setCastFile(event.target.files?.[0] ?? null)}
+          />
+        </label>
+        <div className="actions">
+          <button type="button" onClick={() => void onAddCast()} disabled={busy}>
+            Add reference
+          </button>
+        </div>
+        <div className="cast-list">
+          {draft.cast.map((item) => (
+            <article className="cast-card" key={item.id}>
+              <CastThumb item={item} preview={castPreviews[item.id]} />
+              <div>
+                <strong>{item.name}</strong>
+                <p className="note">
+                  {tokenLabel(item.role)}
+                  {item.markers ? ` · ${item.markers}` : ""}
+                </p>
+                <button type="button" onClick={() => removeCast(item.id)}>
+                  Remove
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+        <label className="field">
+          <span>Music bed</span>
+          <input
+            type="file"
+            accept="audio/mpeg,audio/wav,audio/mp4,audio/ogg,.mp3,.wav,.m4a,.ogg"
+            onChange={(event) => void onMusicFile(event.target.files?.[0] ?? null)}
+          />
+        </label>
+        {draft.music_path ? (
+          <p className="note">Music file stored{musicLabel ? `: ${musicLabel}` : ""}. It is mixed under the episode. Nothing is generated or downloaded.</p>
+        ) : (
+          <p className="note">Optional. A local audio file is mixed under the episode at a low level with a fade out.</p>
+        )}
+      </section>
+
       {showEditor ? (
       <section className="panel">
         <h2>Look bible</h2>
@@ -793,6 +1042,38 @@ export function App() {
                 />
               </label>
             </div>
+            <div className="grid">
+              <label className="field">
+                <span>Video mode</span>
+                <select
+                  value={shot.video_mode}
+                  onChange={(event) => updateShot(index, { video_mode: event.target.value })}
+                >
+                  {VIDEO_MODES.map((mode) => (
+                    <option key={mode} value={mode}>
+                      {tokenLabel(mode)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Voice id</span>
+                <input
+                  value={shot.voice_id}
+                  disabled={shot.video_mode !== "reference_to_video"}
+                  placeholder={shot.video_mode === "reference_to_video" ? "eve" : "Reference-to-video only"}
+                  onChange={(event) => updateShot(index, { voice_id: event.target.value })}
+                />
+              </label>
+            </div>
+            <label className="field">
+              <span>Dialogue</span>
+              <input
+                value={shot.dialogue}
+                onChange={(event) => updateShot(index, { dialogue: event.target.value })}
+                placeholder="Optional spoken line, written into the motion prompt"
+              />
+            </label>
             <label className="field">
               <span>Still prompt</span>
               <textarea
@@ -853,6 +1134,8 @@ export function App() {
               Status <span className="status">{latest.status}</span>
               {` · continuity ${latest.continuity_mode ?? "not set"}`}
               {` · grade match ${latest.grade_match ? "ran" : "did not run"}`}
+              {` · audio ${latest.has_audio ? "yes" : "no"}`}
+              {` · music bed ${latest.music_bed_applied ? "applied" : "not applied"}`}
               {packId ? ` · pack ${packId}` : ""}
             </p>
             {latest.message ? <p className="note">{latest.message}</p> : null}
@@ -882,6 +1165,8 @@ export function App() {
                 <span>video {shot.called_imagine_video ? "called" : "not called"}</span>
                 <span>clip {shot.produced_mp4 ? "yes" : "no"}</span>
                 <span>still mode {shot.still_mode ?? "not set"}</span>
+                <span>video mode {shot.video_mode ?? "not set"}</span>
+                {shot.note ? <span>{shot.note}</span> : null}
                 {shot.still_path ? <code>{shot.still_path}</code> : null}
                 {shot.clip_path ? <code>{shot.clip_path}</code> : null}
                 {shot.error ? <span>{shot.error}</span> : null}
@@ -892,6 +1177,68 @@ export function App() {
                     <p>Still sent: {shot.moderation.softened_prompt_still}</p>
                     <p>Motion was: {shot.moderation.original_prompt_motion}</p>
                     <p>Motion sent: {shot.moderation.softened_prompt_motion}</p>
+                  </div>
+                ) : null}
+                {latest.status === "done" || latest.status === "error" ? (
+                  <div className="revise" data-testid={`revise-${shot.id}`}>
+                    <label className="field">
+                      <span>Revise prompt</span>
+                      <textarea
+                        value={revisePrompt[shot.id] ?? ""}
+                        onChange={(event) =>
+                          setRevisePrompt((current) => ({ ...current, [shot.id]: event.target.value }))
+                        }
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Extend seconds (2–10)</span>
+                      <input
+                        type="number"
+                        min={2}
+                        max={10}
+                        value={extendSec[shot.id] ?? 4}
+                        onChange={(event) =>
+                          setExtendSec((current) => ({
+                            ...current,
+                            [shot.id]: Number(event.target.value),
+                          }))
+                        }
+                      />
+                    </label>
+                    <div className="actions">
+                      <button
+                        type="button"
+                        data-testid={`revise-regenerate-${shot.id}`}
+                        onClick={() => void onRevise(shot.id, "regenerate")}
+                      >
+                        Regenerate
+                      </button>
+                      <button
+                        type="button"
+                        data-testid={`revise-edit-${shot.id}`}
+                        onClick={() => void onRevise(shot.id, "edit")}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        data-testid={`revise-extend-${shot.id}`}
+                        onClick={() => void onRevise(shot.id, "extend")}
+                      >
+                        Extend
+                      </button>
+                    </div>
+                    {reviseStatus[shot.id] ? <p className="note">{reviseStatus[shot.id]}</p> : null}
+                    {shot.revisions?.length ? (
+                      <ul className="versions">
+                        {shot.revisions.map((revision) => (
+                          <li key={`${shot.id}-${revision.version}`}>
+                            v{revision.version} {revision.action}
+                            {revision.clip_path ? ` · ${revision.clip_path}` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

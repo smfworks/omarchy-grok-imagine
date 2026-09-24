@@ -20,6 +20,10 @@ class JobInProgress(Exception):
         super().__init__(f"Pack already has an active job ({job_id})")
 
 
+class ReviseRejected(Exception):
+    """The job cannot be revised. No Imagine call should follow."""
+
+
 def utcnow() -> str:
     # Microseconds keep same-second jobs in order. rowid is the tie-break.
     return datetime.now(UTC).isoformat()
@@ -39,6 +43,9 @@ def blank_shot_record(shot_id: str) -> dict[str, Any]:
         "video_request_id": None,
         "error": None,
         "moderation": None,
+        "video_mode": None,
+        "note": None,
+        "revisions": [],
     }
 
 
@@ -47,6 +54,8 @@ def aggregate_gates(
     *,
     stitched: bool,
     grade_match: bool = False,
+    has_audio: bool = False,
+    music_bed_applied: bool = False,
 ) -> dict[str, bool]:
     """Job-level gates flip true once that work has happened for any shot.
 
@@ -64,6 +73,8 @@ def aggregate_gates(
         "produced_mp4": any_flag("produced_mp4"),
         "stitched_episode": bool(stitched),
         "grade_match": bool(grade_match),
+        "has_audio": bool(has_audio),
+        "music_bed_applied": bool(music_bed_applied),
     }
 
 
@@ -194,6 +205,41 @@ class Store:
             raise RuntimeError("job insert did not persist")
         return job
 
+    def update_pack_body(self, pack_id: str, body: dict[str, Any]) -> None:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE packs SET body_json = ? WHERE id = ?",
+                (json.dumps(body), pack_id),
+            )
+            if cur.rowcount != 1:
+                raise KeyError(pack_id)
+
+    def claim_for_revise(self, job_id: str) -> dict[str, Any]:
+        """Mark a finished or failed job running so a second revise cannot start."""
+        with self._lock, self._connect() as conn:
+            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                raise KeyError(job_id)
+            status = str(row["status"])
+            if status in {"queued", "running"}:
+                raise JobInProgress(job_id)
+            if status == "stub":
+                raise ReviseRejected("Stub job has no Imagine media to revise.")
+            if status not in {"done", "error"}:
+                raise ReviseRejected(f"Job status {status} cannot be revised.")
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'running', message = 'Revising one shot.', updated_at = ?
+                WHERE id = ?
+                """,
+                (utcnow(), job_id),
+            )
+        job = self.get_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return job
+
     def update_job(self, job_id: str, **changes: Any) -> dict[str, Any]:
         allowed = {
             "status",
@@ -278,6 +324,12 @@ class Store:
             public = dict(shot)
             for key in ("still_path", "clip_path", "last_frame_path"):
                 public[key] = self._if_file(shot.get(key))
+            revisions = []
+            for item in shot.get("revisions") or []:
+                revision = dict(item)
+                revision["clip_path"] = self._if_file(revision.get("clip_path"))
+                revisions.append(revision)
+            public["revisions"] = revisions
             shots.append(public)
         gates = job["gates"]
         return {
@@ -288,6 +340,8 @@ class Store:
             "error": job["error"],
             "continuity_mode": job["continuity_mode"],
             "grade_match": bool(gates.get("grade_match", False)),
+            "has_audio": bool(gates.get("has_audio", False)),
+            "music_bed_applied": bool(gates.get("music_bed_applied", False)),
             "called_imagine_still": bool(gates["called_imagine_still"]),
             "produced_still": bool(gates["produced_still"]),
             "called_imagine_video": bool(gates["called_imagine_video"]),
@@ -326,6 +380,8 @@ class Store:
             "look_bible": bible,
             "style_preset": body.get("style_preset") or "",
             "beat_map": body.get("beat_map") or [],
+            "cast": body.get("cast") or [],
+            "music_path": body.get("music_path") or "",
             "shots": body["shots"],
             "created_at": created_at,
         }
