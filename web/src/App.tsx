@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   attachMusic,
   createPack,
@@ -232,6 +232,7 @@ export function App() {
   const [castRole, setCastRole] = useState("character");
   const [castMarkers, setCastMarkers] = useState("");
   const [castFile, setCastFile] = useState<File | null>(null);
+  const castFileInput = useRef<HTMLInputElement>(null);
   const [castPreviews, setCastPreviews] = useState<Record<string, string>>({});
   const [musicLabel, setMusicLabel] = useState("");
   const [revisePrompt, setRevisePrompt] = useState<Record<string, string>>({});
@@ -485,6 +486,9 @@ export function App() {
       setCastName("");
       setCastMarkers("");
       setCastFile(null);
+      if (castFileInput.current) {
+        castFileInput.current.value = "";
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not upload the reference");
     }
@@ -796,6 +800,7 @@ export function App() {
         <label className="field">
           <span>Reference image</span>
           <input
+            ref={castFileInput}
             type="file"
             accept="image/png,image/jpeg,image/webp"
             onChange={(event) => setCastFile(event.target.files?.[0] ?? null)}
