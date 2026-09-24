@@ -10,13 +10,15 @@ this module will not overwrite either side to force a match.
 A look bible is always returned. Non-empty bible lines are kept. Empty lines
 are written from the title and logline: same face and body, same clothes,
 palette, key light, and a locked film look.
+A supplied style preset, beat map, shot beat, and camera card are kept.
+Fill does not invent a beat map.
 """
 
 from __future__ import annotations
 
 import re
 
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from omarchy_imagine.config import (
     ASPECT_RATIOS,
@@ -25,7 +27,15 @@ from omarchy_imagine.config import (
     MIN_DURATION_SEC,
     VIDEO_RESOLUTIONS,
 )
-from omarchy_imagine.schema import LookBible, PackIn
+from omarchy_imagine.schema import (
+    BEAT_ROLES,
+    STYLE_PRESETS,
+    CameraCard,
+    LookBible,
+    PackIn,
+    StoryBeat,
+    coerce_token,
+)
 
 MAX_SHOTS = 12
 DEFAULT_SHOT_COUNT = 2
@@ -42,11 +52,18 @@ class ShotFill(BaseModel):
     duration_sec: int | None = None
     end_state: str = ""
     start_state: str = ""
+    beat: str = ""
+    camera: CameraCard = Field(default_factory=CameraCard)
 
     @field_validator("id", "prompt_still", "prompt_motion", "end_state", "start_state")
     @classmethod
     def strip_text(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("beat")
+    @classmethod
+    def beat_role(cls, value: str) -> str:
+        return coerce_token(value, BEAT_ROLES, {}, "beat", allow_empty=True)
 
     @field_validator("duration_sec")
     @classmethod
@@ -67,12 +84,19 @@ class FillIn(BaseModel):
     resolution: str | None = None
     shot_count: int | None = None
     look_bible: LookBible | None = None
+    style_preset: str = ""
+    beat_map: list[StoryBeat] = Field(default_factory=list)
     shots: list[ShotFill] | None = None
 
     @field_validator("title", "logline")
     @classmethod
     def strip_text(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("style_preset")
+    @classmethod
+    def style_value(cls, value: str) -> str:
+        return coerce_token(value, STYLE_PRESETS, {}, "style_preset", allow_empty=True)
 
     @field_validator("aspect_ratio")
     @classmethod
@@ -132,6 +156,8 @@ def fill_pack(body: FillIn) -> PackIn:
         "aspect_ratio": body.aspect_ratio or "16:9",
         "resolution": body.resolution or "720p",
         "look_bible": _look_bible(body, title, logline),
+        "style_preset": body.style_preset,
+        "beat_map": [item.model_dump() for item in body.beat_map],
         "shots": shots,
     }
     try:
@@ -235,6 +261,8 @@ def _shot_dict(shot: ShotFill) -> dict[str, object]:
         else DEFAULT_DURATION_SEC,
         "end_state": shot.end_state,
         "start_state": shot.start_state,
+        "beat": shot.beat,
+        "camera": shot.camera.model_dump(),
     }
 
 

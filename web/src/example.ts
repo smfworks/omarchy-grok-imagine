@@ -12,6 +12,8 @@ export const examplePack: PackDraft = {
     lighting: "Soft dawn key, low contrast, fog diffusion, and no hard shadow change between shots.",
     camera: "35mm film still, natural color, one grade, no flicker and no lens change between shots.",
   },
+  style_preset: "",
+  beat_map: [],
   shots: [
     {
       id: "s01",
@@ -20,6 +22,8 @@ export const examplePack: PackDraft = {
       duration_sec: 8,
       end_state: "The boat is ten meters off the dock, bow pointed toward open water, fog still thick.",
       start_state: "",
+      beat: "",
+      camera: { scale: "", angle: "", move: "", exit_frame: "" },
     },
     {
       id: "s02",
@@ -28,6 +32,8 @@ export const examplePack: PackDraft = {
       duration_sec: 8,
       start_state: "The boat is ten meters off the dock, bow pointed toward open water, fog still thick.",
       end_state: "The boat is in open water, fog lifted to the horizon, bow unchanged.",
+      beat: "",
+      camera: { scale: "", angle: "", move: "", exit_frame: "" },
     },
   ],
 };

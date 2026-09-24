@@ -324,6 +324,8 @@ class Store:
             "aspect_ratio": body["aspect_ratio"],
             "resolution": body["resolution"],
             "look_bible": bible,
+            "style_preset": body.get("style_preset") or "",
+            "beat_map": body.get("beat_map") or [],
             "shots": body["shots"],
             "created_at": created_at,
         }

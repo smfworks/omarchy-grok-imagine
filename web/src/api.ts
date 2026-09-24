@@ -69,6 +69,7 @@ export type PlanRequest = {
   aspect_ratio?: string;
   resolution?: string;
   title?: string;
+  style_preset?: string;
 };
 
 export async function planPack(body: PlanRequest): Promise<PackDraft> {

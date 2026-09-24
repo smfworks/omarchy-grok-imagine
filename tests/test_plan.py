@@ -259,7 +259,24 @@ def test_chat_completions_request_is_strict_json_and_not_imagine() -> None:
     assert schema["json_schema"]["schema"]["properties"]["shots"]["maxItems"] == 2
     bible_schema = schema["json_schema"]["schema"]["properties"]["look_bible"]
     assert bible_schema["required"] == ["cast", "wardrobe", "palette", "lighting", "camera"]
-    assert "look_bible" in schema["json_schema"]["schema"]["required"]
+    required = schema["json_schema"]["schema"]["required"]
+    assert "look_bible" in required
+    assert "style_preset" in required
+    assert "beat_map" in required
+    shot_schema = schema["json_schema"]["schema"]["properties"]["shots"]["items"]
+    assert shot_schema["required"] == [
+        "prompt_still",
+        "prompt_motion",
+        "end_state",
+        "beat",
+        "camera",
+    ]
+    assert shot_schema["properties"]["camera"]["required"] == [
+        "scale",
+        "angle",
+        "move",
+        "exit_frame",
+    ]
     assert "secret-key" not in json.dumps(body)
     assert pack.title == "From the model"
     assert [shot.duration_sec for shot in pack.shots] == [8, 8]

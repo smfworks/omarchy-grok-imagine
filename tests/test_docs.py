@@ -38,6 +38,19 @@ def test_skill_documents_the_http_flow() -> None:
     assert "MIT" in (ROOT / "LICENSE").read_text(encoding="utf-8")
 
 
+def test_docs_cover_director_craft() -> None:
+    for relative in (
+        "README.md",
+        ".cursor/skills/omarchy-imagine/SKILL.md",
+        "docs/agent-skill.md",
+    ):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        assert "style_preset" in text
+        assert "beat_map" in text
+        assert "exit_frame" in text
+        assert "action_duel" in text
+
+
 def test_docs_cover_the_director_brief() -> None:
     for relative in (
         "README.md",
