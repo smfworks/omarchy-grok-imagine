@@ -1,4 +1,4 @@
-import type { Health, Job, PackDraft } from "./types";
+import type { CastRef, Health, Job, PackDraft } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8010";
 const TOKEN = import.meta.env.VITE_API_TOKEN || "local-dev-token";
@@ -70,6 +70,8 @@ export type PlanRequest = {
   resolution?: string;
   title?: string;
   style_preset?: string;
+  cast?: CastRef[];
+  music_path?: string;
 };
 
 export async function planPack(body: PlanRequest): Promise<PackDraft> {
@@ -87,6 +89,109 @@ export async function runPack(packId: string): Promise<{ job_id: string; status:
 export async function fetchJobs(packId: string): Promise<Job[]> {
   const payload = await request<{ jobs: Job[] }>(`/api/packs/${packId}/jobs`);
   return payload.jobs;
+}
+
+async function formRequest<T>(path: string, body: FormData): Promise<T> {
+  const headers = new Headers();
+  headers.set("Authorization", `Bearer ${TOKEN}`);
+  const response = await fetch(`${API_BASE}${path}`, { method: "POST", body, headers });
+  if (!response.ok) {
+    let message = response.statusText || `HTTP ${response.status}`;
+    try {
+      const payload = (await response.json()) as ErrorBody;
+      if (payload.detail !== undefined) {
+        message = formatDetail(payload.detail);
+      }
+    } catch {
+      // The body was not JSON.
+    }
+    throw new Error(message);
+  }
+  return (await response.json()) as T;
+}
+
+export async function uploadReference(
+  file: File,
+  name: string,
+  role: string,
+  markers: string,
+): Promise<CastRef> {
+  const body = new FormData();
+  body.set("file", file);
+  body.set("name", name);
+  body.set("role", role);
+  body.set("markers", markers);
+  return formRequest("/api/references", body);
+}
+
+export function referenceUrl(refId: string): string {
+  return `${API_BASE}/api/references/${refId}`;
+}
+
+export async function fetchReferenceBlob(refId: string): Promise<Blob> {
+  const response = await fetch(referenceUrl(refId), {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  });
+  if (!response.ok) {
+    throw new Error("Reference image is not on disk.");
+  }
+  return response.blob();
+}
+
+export async function uploadMusic(file: File): Promise<{ music_path: string }> {
+  const body = new FormData();
+  body.set("file", file);
+  return formRequest("/api/music", body);
+}
+
+export async function attachMusic(
+  packId: string,
+  file: File,
+): Promise<{ music_path: string; music_bed_applied: boolean; has_audio: boolean }> {
+  const body = new FormData();
+  body.set("file", file);
+  return formRequest(`/api/packs/${packId}/music`, body);
+}
+
+export async function regenerateShot(
+  packId: string,
+  jobId: string,
+  shotId: string,
+  promptStill: string,
+  promptMotion: string,
+): Promise<Job> {
+  return request(`/api/packs/${packId}/jobs/${jobId}/shots/${shotId}/regenerate`, {
+    method: "POST",
+    body: JSON.stringify({
+      prompt_still: promptStill,
+      prompt_motion: promptMotion,
+    }),
+  });
+}
+
+export async function editShot(
+  packId: string,
+  jobId: string,
+  shotId: string,
+  prompt: string,
+): Promise<Job> {
+  return request(`/api/packs/${packId}/jobs/${jobId}/shots/${shotId}/edit`, {
+    method: "POST",
+    body: JSON.stringify({ prompt }),
+  });
+}
+
+export async function extendShot(
+  packId: string,
+  jobId: string,
+  shotId: string,
+  prompt: string,
+  durationSec: number,
+): Promise<Job> {
+  return request(`/api/packs/${packId}/jobs/${jobId}/shots/${shotId}/extend`, {
+    method: "POST",
+    body: JSON.stringify({ prompt, duration_sec: durationSec }),
+  });
 }
 
 export async function downloadEpisode(packId: string): Promise<void> {

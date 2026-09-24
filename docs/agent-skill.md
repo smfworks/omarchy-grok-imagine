@@ -51,7 +51,25 @@ Read the gates on `jobs[0]`. They stay false until the work happened:
 - `produced_mp4`
 - `stitched_episode`
 
-Without `XAI_API_KEY`, status is `stub`, every gate is false, `continuity_mode` is null, `grade_match` is false, and the payload has no media URL.
+Without `XAI_API_KEY`, status is `stub`, every gate is false, `continuity_mode` is null, `grade_match` is false, `has_audio` is false, `music_bed_applied` is false, and the payload has no media URL.
+
+`has_audio` is true only when ffprobe sees an audio stream on `episode.mp4`. `music_bed_applied` is true only after an uploaded bed was mixed into that file.
+
+## Cast, revise, and audio
+
+Upload a reference image before you put it on a pack. `POST /api/references` is multipart (`file`, `name`, `role`, `markers`) and returns `{id, name, role, markers, image_path}` under `data/references/`. `role` is `character`, `prop`, or `location`. PNG, JPEG, or WebP, max 10 MB. `GET /api/references/{id}` returns the file. `DELETE` removes it. `POST /api/packs` rejects a missing image. Do not invent a URL.
+
+Optional shot fields: `video_mode` (`image_to_video` or `reference_to_video`), `dialogue` (folded into the video prompt; there is no dialogue API field), and `voice_id` (preset voices, only on `reference_to_video`). Reference-to-video uses `grok-imagine-video-1.5` with `reference_images` and no first-frame `image`, capped at 720p. The Imagine landing page still says 1.5 does not support that mode. The dedicated reference-to-video page does. This app follows the dedicated page.
+
+On a `done` or `error` job, revise one shot and restitch:
+
+- `POST /api/packs/{pack}/jobs/{job}/shots/{shot}/regenerate` with optional `prompt_still` and `prompt_motion`
+- `.../edit` with `prompt` (`POST /v1/videos/edits`, model `grok-imagine-video`, input duration kept, refused above 8.7 seconds)
+- `.../extend` with `prompt` and `duration_sec` from 2 to 10
+
+`queued` or `running` is `409`. A stub job is `422` and does not call xAI. Prior clips are kept as `clip.vN.mp4`. Read `shots[].revisions`. Grade match runs again on the current clips. Other shots are not re-rendered.
+
+`POST /api/music` stores a local wav, mp3, m4a, or ogg (max 20 MB). `POST /api/packs/{id}/music` attaches it and remixes a stitched episode from `episode.base.mp4` without calling Imagine. The server does not generate or download music.
 
 ## Continuity lock
 

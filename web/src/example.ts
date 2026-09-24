@@ -14,6 +14,8 @@ export const examplePack: PackDraft = {
   },
   style_preset: "",
   beat_map: [],
+  cast: [],
+  music_path: "",
   shots: [
     {
       id: "s01",
@@ -24,6 +26,9 @@ export const examplePack: PackDraft = {
       start_state: "",
       beat: "",
       camera: { scale: "", angle: "", move: "", exit_frame: "" },
+      video_mode: "image_to_video",
+      dialogue: "",
+      voice_id: "",
     },
     {
       id: "s02",
@@ -34,6 +39,9 @@ export const examplePack: PackDraft = {
       end_state: "The boat is in open water, fog lifted to the horizon, bow unchanged.",
       beat: "",
       camera: { scale: "", angle: "", move: "", exit_frame: "" },
+      video_mode: "image_to_video",
+      dialogue: "",
+      voice_id: "",
     },
   ],
 };

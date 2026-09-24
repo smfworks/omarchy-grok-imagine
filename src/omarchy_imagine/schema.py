@@ -8,9 +8,14 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from omarchy_imagine.config import (
     ASPECT_RATIOS,
+    CAST_ROLES,
     DEFAULT_DURATION_SEC,
+    EXTEND_MAX_SEC,
+    EXTEND_MIN_SEC,
+    MAX_CAST_ENTRIES,
     MAX_DURATION_SEC,
     MIN_DURATION_SEC,
+    VIDEO_MODES,
     VIDEO_RESOLUTIONS,
 )
 
@@ -173,6 +178,65 @@ def render_look_bible(value: object) -> str:
     return bible.prompt_block()
 
 
+class CastRef(BaseModel):
+    """One named reference image. ``image_path`` is relative to the data directory.
+
+    An empty ``image_path`` is allowed on a plan or fill draft so names can be
+    written into prompts before a file is uploaded. Saving a pack requires the file.
+    """
+
+    id: str
+    name: str
+    role: str
+    markers: str = ""
+    image_path: str = ""
+
+    @field_validator("id")
+    @classmethod
+    def cast_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not _SHOT_ID.fullmatch(cleaned):
+            raise ValueError("id must be a filename-safe token (letters, numbers, _, -)")
+        return cleaned
+
+    @field_validator("name")
+    @classmethod
+    def cast_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("name must not be empty")
+        if len(cleaned) > 80:
+            raise ValueError("name must be at most 80 characters")
+        return cleaned
+
+    @field_validator("role")
+    @classmethod
+    def cast_role(cls, value: str) -> str:
+        return coerce_token(value, CAST_ROLES, {}, "role", allow_empty=False)
+
+    @field_validator("markers")
+    @classmethod
+    def cast_markers(cls, value: str) -> str:
+        cleaned = value.strip()
+        if len(cleaned) > 400:
+            raise ValueError("markers must be at most 400 characters")
+        return cleaned
+
+    @field_validator("image_path")
+    @classmethod
+    def cast_image_path(cls, value: str) -> str:
+        return _relative_data_path(value, "image_path")
+
+
+def _relative_data_path(value: str, name: str) -> str:
+    cleaned = value.strip().replace("\\", "/")
+    if not cleaned:
+        return ""
+    if cleaned.startswith("/") or ".." in cleaned.split("/"):
+        raise ValueError(f"{name} must be a relative path inside the data directory")
+    return cleaned
+
+
 class Shot(BaseModel):
     id: str
     prompt_still: str
@@ -182,6 +246,9 @@ class Shot(BaseModel):
     start_state: str = ""
     beat: str = ""
     camera: CameraCard = Field(default_factory=CameraCard)
+    video_mode: str = "image_to_video"
+    dialogue: str = ""
+    voice_id: str = ""
 
     @field_validator("id")
     @classmethod
@@ -218,6 +285,29 @@ class Shot(BaseModel):
             )
         return value
 
+    @field_validator("video_mode")
+    @classmethod
+    def video_mode_value(cls, value: str) -> str:
+        return coerce_token(value, VIDEO_MODES, {}, "video_mode", allow_empty=False)
+
+    @field_validator("dialogue")
+    @classmethod
+    def dialogue_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if len(cleaned) > 400:
+            raise ValueError("dialogue must be at most 400 characters")
+        return cleaned
+
+    @field_validator("voice_id")
+    @classmethod
+    def voice_value(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            return ""
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,31}", cleaned):
+            raise ValueError("voice_id must be a short voice token such as eve")
+        return cleaned
+
 
 class PackIn(BaseModel):
     title: str
@@ -227,6 +317,8 @@ class PackIn(BaseModel):
     look_bible: LookBible = Field(default_factory=LookBible)
     style_preset: str = ""
     beat_map: list[StoryBeat] = Field(default_factory=list)
+    cast: list[CastRef] = Field(default_factory=list)
+    music_path: str = ""
     shots: list[Shot] = Field(min_length=1)
 
     @field_validator("title")
@@ -265,11 +357,31 @@ class PackIn(BaseModel):
             raise ValueError(f"resolution must be one of: {allowed}")
         return cleaned
 
+    @field_validator("music_path")
+    @classmethod
+    def music_value(cls, value: str) -> str:
+        return _relative_data_path(value, "music_path")
+
     @model_validator(mode="after")
     def continuity(self) -> PackIn:
+        if len(self.cast) > MAX_CAST_ENTRIES:
+            raise ValueError(f"A pack can include at most {MAX_CAST_ENTRIES} cast references")
+        cast_ids = [item.id for item in self.cast]
+        if len(cast_ids) != len(set(cast_ids)):
+            raise ValueError("cast ids must be unique")
         ids = [shot.id for shot in self.shots]
         if len(ids) != len(set(ids)):
             raise ValueError("shot ids must be unique")
+        for shot in self.shots:
+            if shot.voice_id and shot.video_mode != "reference_to_video":
+                raise ValueError(
+                    f"shots[{shot.id}].voice_id is only supported on reference_to_video"
+                )
+            if shot.video_mode == "reference_to_video" and not self.cast and not shot.voice_id:
+                raise ValueError(
+                    f"shots[{shot.id}].video_mode reference_to_video "
+                    "needs cast images or a voice_id"
+                )
         for index in range(1, len(self.shots)):
             previous = self.shots[index - 1]
             current = self.shots[index]
@@ -297,6 +409,16 @@ class ModerationNote(BaseModel):
     softened_prompt_motion: str = ""
 
 
+class ShotRevision(BaseModel):
+    """One kept clip. ``clip_path`` is null once that file is gone from disk."""
+
+    version: int
+    action: str
+    clip_path: str | None = None
+    prompt: str = ""
+    created_at: str = ""
+
+
 class ShotStatus(BaseModel):
     id: str
     called_imagine_still: bool
@@ -307,9 +429,12 @@ class ShotStatus(BaseModel):
     clip_path: str | None = None
     last_frame_path: str | None = None
     still_mode: str | None = None
+    video_mode: str | None = None
     video_request_id: str | None = None
+    note: str | None = None
     error: str | None = None
     moderation: ModerationNote | None = None
+    revisions: list[ShotRevision] = Field(default_factory=list)
 
 
 class JobOut(BaseModel):
@@ -320,6 +445,8 @@ class JobOut(BaseModel):
     error: str | None = None
     continuity_mode: str | None = None
     grade_match: bool = False
+    has_audio: bool = False
+    music_bed_applied: bool = False
     called_imagine_still: bool
     produced_still: bool
     called_imagine_video: bool
@@ -339,3 +466,53 @@ class RunOut(BaseModel):
     job_id: str
     pack_id: str
     status: str
+
+
+class RegenerateIn(BaseModel):
+    prompt_still: str = ""
+    prompt_motion: str = ""
+
+    @field_validator("prompt_still", "prompt_motion")
+    @classmethod
+    def optional_prompt(cls, value: str) -> str:
+        return value.strip()
+
+
+class EditClipIn(BaseModel):
+    prompt: str
+
+    @field_validator("prompt")
+    @classmethod
+    def required_prompt(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("prompt must not be empty")
+        return cleaned
+
+
+class ExtendClipIn(BaseModel):
+    prompt: str
+    duration_sec: int
+
+    @field_validator("prompt")
+    @classmethod
+    def required_prompt(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("prompt must not be empty")
+        return cleaned
+
+    @field_validator("duration_sec")
+    @classmethod
+    def extend_duration(cls, value: int) -> int:
+        if value < EXTEND_MIN_SEC or value > EXTEND_MAX_SEC:
+            raise ValueError(
+                f"duration_sec must be between {EXTEND_MIN_SEC} and {EXTEND_MAX_SEC}"
+            )
+        return value
+
+
+class MusicOut(BaseModel):
+    music_path: str
+    music_bed_applied: bool = False
+    has_audio: bool = False

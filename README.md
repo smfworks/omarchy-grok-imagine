@@ -71,7 +71,9 @@ Before concat, the server soft-matches every clip after the first toward clip 1.
 
 The pass is on unless `OMARCHY_GRADE_MATCH` is `0`, `false`, `no`, or `off`. If ffmpeg is missing `eq` or `signalstats`, or a measurement fails, the pass is skipped, the job message says why, and concat still runs. The episode does not fail because the grade did not run.
 
-`grade_match` on the job is true only when a graded file was written and used for concat. A stub job leaves it false. The job panel shows that flag, `continuity_mode` (`last_frame_edit` or `prose_regenerate`, or not set on a stub), and each shot's `still_mode` (`text_to_image` or `last_frame_edit`).
+`grade_match` on the job is true only when a graded file was written and used for concat. A stub job leaves it false. The job panel shows that flag, `continuity_mode` (`last_frame_edit` or `prose_regenerate`, or not set on a stub), and each shot's `still_mode` (`text_to_image`, `cast_reference`, or `last_frame_edit`).
+
+When the source clip has an audio stream, the grade pass keeps it (`aac`). A silent source stays silent. The pass does not invent audio.
 
 ## Fill blanks
 
@@ -137,6 +139,70 @@ When a shot hits one of those responses, the job rewrites that shot's still prom
 
 The job panel shows the original prompt, the softened prompt, and the retry count for that shot. The saved pack keeps the text you typed.
 
+## Phase 2
+
+The plan is [docs/phase2.md](docs/phase2.md). Three additions sit on the director brief, director craft, and continuity lock. A pack that omits `cast`, `music_path`, `video_mode`, `dialogue`, and `voice_id` still validates and runs.
+
+### Cast / reference lock
+
+`cast` is a list of named local images. Each entry has `id`, `name`, `role` (`character`, `prop`, or `location`), `markers`, and `image_path` under `data/references/`. The wizard Cast panel (Simple and Advanced) uploads, previews, and removes them.
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/api/references \
+  -H "Authorization: Bearer local-dev-token" \
+  -F "file=@mara.png" \
+  -F "name=Mara" \
+  -F "role=character" \
+  -F "markers=Grey coat, scar on the left brow"
+```
+
+PNG, JPEG, or WebP by magic bytes, max 10 MB. The response is a cast entry with a relative `image_path`. `GET /api/references/{id}` returns the file. `DELETE` removes it. Saving a pack rejects a missing image. The server does not invent a URL.
+
+Imagine image generations do not take reference images. Stills use image edits, at most 3 sources (the landing page allows 3; the multi-image page allows 5; this app stays at 3):
+
+- No cast and no previous frame: text-to-image (`still_mode: text_to_image`).
+- Cast and no previous frame: edits with those images (`still_mode: cast_reference`).
+- Previous frame and no cast: the Phase 1 single-image edit (`still_mode: last_frame_edit`).
+- Previous frame and cast: the last frame is `<IMAGE_0>`, plus up to 2 cast refs (`still_mode: last_frame_edit`).
+
+Plan and fill keep a cast you already sent and name those people, props, and places in the still and motion lines.
+
+### Reference-to-video
+
+Each shot has `video_mode`: `image_to_video` (default) or `reference_to_video`.
+
+Checked against the docs on 2026-09-24. The [reference-to-video](https://docs.x.ai/developers/model-capabilities/video/reference-to-video) page, the generation mode table, and the files-input examples all send `reference_images` to `grok-imagine-video-1.5`. The [Imagine landing](https://docs.x.ai/developers/model-capabilities/imagine) page still says reference-to-video requires `grok-imagine-video` and that 1.5 does not support it. That landing sentence is stale against the dedicated pages, so this app offers the mode on 1.5.
+
+Reference-to-video is capped at 720p. A `1080p` pack that picks the mode is sent at 720p, and the shot `note` says so. This app does not send `image` together with `reference_images`. The generation page treats that combination as HTTP 400, and the reference-to-video page disagrees about whether 1.5 may pin a first frame. `image_to_video` sends the still as `image` and no references. `reference_to_video` sends `reference_images` and no `image`, so the first frame is not locked. The mode needs at least one cast image or a `voice_id`.
+
+`dialogue` is optional prose. There is no dialogue field on the video API, so the line is written into the motion prompt. `voice_id` is `reference_audios[].voice_id` (preset voices such as `eve`, `leo`, `ara`) and is valid only on `reference_to_video`. A `voice_id` on `image_to_video` is HTTP 422. Custom voice audio files are partner-only and are not accepted.
+
+### Per-shot revise
+
+On a job in `done` or `error`, one shot can be revised without redoing the others. `queued` and `running` are 409. A stub job, or a live job with `XAI_API_KEY` unset, is 422 and does not open a client.
+
+| Route | Body | What it calls |
+| --- | --- | --- |
+| `POST /api/packs/{pack}/jobs/{job}/shots/{shot}/regenerate` | optional `prompt_still`, `prompt_motion` | Still plus video for that shot |
+| `.../edit` | `prompt` | `POST /v1/videos/edits` |
+| `.../extend` | `prompt`, `duration_sec` 2–10 | `POST /v1/videos/extensions` |
+
+Edits and extensions use `grok-imagine-video`, the model in the REST examples, not 1.5. An edit keeps the input duration and is capped at about 8.7 seconds and 720p. If ffprobe says the clip is longer than 8.7 seconds, the route is 422 and xAI is not called. An extension adds 2–10 seconds.
+
+The current file stays `clip.mp4`. Before it is replaced, the previous file is copied to `clip.vN.mp4`. `shots[].revisions` records `version`, `action` (`generate`, `regenerate`, `edit`, `extend`), `clip_path`, `prompt`, and `created_at`. Gates flip only for work that happened. A failed edit or extend that did not replace the clip leaves a `done` job `done`. If the clip was replaced and concat did not write a new episode, the old episode is removed and `stitched_episode` stays false.
+
+After a revise, grade match runs again on the current clips. Clip 1 is the reference. A revised later shot is matched toward the current clip 1. A revised clip 1 becomes the new reference. Archived `clip.vN.mp4` files stay ungraded. Other shots are not re-rendered. A regenerate of shot N uses the previous shot's last frame when that file is on disk. Edit and extend re-extract this shot's last frame so a later regenerate of the next shot can see it. They do not rebuild the next shot.
+
+The job panel shows Regenerate, Edit, and Extend, a prompt field, a status line, and the version list.
+
+### Audio
+
+Generated video includes audio unless `generate_audio` is false. This app does not send that flag, so a returned track is kept through the stitch. If every clip is silent, the episode stays silent. If any clip has audio, silent clips get a matching silent track first so concat does not drop the tracks that exist.
+
+`has_audio` is true only when ffprobe sees an audio stream on `episode.mp4`.
+
+Optional music is a file you upload. The server never generates or downloads music. `POST /api/music` stores wav, mp3, m4a, or ogg (max 20 MB) under `data/music/`. `POST /api/packs/{id}/music` stores it on the pack and, when the latest job is `done` and already stitched, remixes from `episode.base.mp4` without calling Imagine. The mix ducks under speech when `sidechaincompress` is available, otherwise it sits at a fixed low level, and it fades out. `music_bed_applied` is true only after that mix writes a file ffprobe says has audio.
+
 ## Honesty gates
 
 Each job exposes booleans that stay false until that work has happened:
@@ -146,6 +212,11 @@ Each job exposes booleans that stay false until that work has happened:
 - `called_imagine_video`
 - `produced_mp4`
 - `stitched_episode`
+
+Two more flags live on the job and stay false until the file proves them:
+
+- `has_audio` — ffprobe sees an audio stream on `episode.mp4`
+- `music_bed_applied` — the uploaded bed was mixed into that file
 
 The same four Imagine flags are stored on each shot. A job-level Imagine flag becomes true once that work has happened for at least one shot. `stitched_episode` is true only after ffmpeg writes the episode file.
 
@@ -207,8 +278,12 @@ Launch order, matching Overwatch: `omarchy-launch-or-focus-webapp`, then `omarch
 Artifacts, when a live run produces them:
 
 ```text
+data/references/<id>.png
+data/music/<id>.wav
 data/runs/<pack_id>/shots/<shot_id>/still.png
 data/runs/<pack_id>/shots/<shot_id>/clip.mp4
+data/runs/<pack_id>/shots/<shot_id>/clip.v1.mp4
+data/runs/<pack_id>/episode.base.mp4
 data/runs/<pack_id>/episode.mp4
 ```
 
@@ -275,9 +350,8 @@ Not in this build:
 - Hermes Desktop pane
 - Cost estimator UI
 - Multi-episode seasons
-- Imagine video editing, extension, and reference-to-video APIs
 
-Director brief planning is included (`POST /api/packs/plan`, and Simple mode in the wizard). It writes a pack draft from one prompt and a target length. It does not estimate cost or plan a season.
+Director brief planning is included (`POST /api/packs/plan`, and Simple mode in the wizard). Phase 2 is included: cast reference images, optional reference-to-video, per-shot regenerate / edit / extend, and an uploaded music bed. It does not estimate cost or plan a season.
 
 Also out of scope: ComfyUI, Qwen, MiniMax, and local GPU lanes.
 

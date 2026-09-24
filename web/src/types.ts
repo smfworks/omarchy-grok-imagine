@@ -33,6 +33,14 @@ export const emptyCamera = (): CameraCard => ({
   exit_frame: "",
 });
 
+export type CastRef = {
+  id: string;
+  name: string;
+  role: string;
+  markers: string;
+  image_path: string;
+};
+
 export type ShotDraft = {
   id: string;
   prompt_still: string;
@@ -42,6 +50,9 @@ export type ShotDraft = {
   start_state: string;
   beat: string;
   camera: CameraCard;
+  video_mode: string;
+  dialogue: string;
+  voice_id: string;
 };
 
 export type PackDraft = {
@@ -52,6 +63,8 @@ export type PackDraft = {
   look_bible: LookBible;
   style_preset: string;
   beat_map: StoryBeat[];
+  cast: CastRef[];
+  music_path: string;
   shots: ShotDraft[];
 };
 
@@ -72,6 +85,14 @@ export type ModerationNote = {
   softened_prompt_motion: string;
 };
 
+export type ShotRevision = {
+  version: number;
+  action: string;
+  clip_path: string | null;
+  prompt: string;
+  created_at: string;
+};
+
 export type ShotStatus = {
   id: string;
   called_imagine_still: boolean;
@@ -82,9 +103,12 @@ export type ShotStatus = {
   clip_path: string | null;
   last_frame_path: string | null;
   still_mode: string | null;
+  video_mode: string | null;
   video_request_id: string | null;
+  note: string | null;
   error: string | null;
   moderation: ModerationNote | null;
+  revisions: ShotRevision[];
 };
 
 export type Job = {
@@ -95,6 +119,8 @@ export type Job = {
   error: string | null;
   continuity_mode: string | null;
   grade_match: boolean;
+  has_audio: boolean;
+  music_bed_applied: boolean;
   called_imagine_still: boolean;
   produced_still: boolean;
   called_imagine_video: boolean;
@@ -122,6 +148,9 @@ export const CAMERA_MOVES = [
   "whip_pan",
   "handheld",
 ] as const;
+
+export const CAST_ROLES = ["character", "prop", "location"] as const;
+export const VIDEO_MODES = ["image_to_video", "reference_to_video"] as const;
 
 export const GATES = [
   ["called_imagine_still", "Called Imagine still"],

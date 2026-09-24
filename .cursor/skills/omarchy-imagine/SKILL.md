@@ -17,8 +17,9 @@ OpenAPI: `http://127.0.0.1:8010/docs`.
 
 Models the server pins (do not send a different model; the adapter chooses them):
 
-- Stills: `grok-imagine-image-2.0` via `POST https://api.x.ai/v1/images/generations` and, for later shots when ffmpeg is available, `POST https://api.x.ai/v1/images/edits`
-- Video: `grok-imagine-video-1.5` via `POST https://api.x.ai/v1/videos/generations`, then poll `GET https://api.x.ai/v1/videos/{request_id}`
+- Stills: `grok-imagine-image-2.0` via `POST https://api.x.ai/v1/images/generations` and, when a cast or a previous frame is present, `POST https://api.x.ai/v1/images/edits` (at most 3 source images)
+- Video generations: `grok-imagine-video-1.5` via `POST https://api.x.ai/v1/videos/generations` (`image` for image-to-video, or `reference_images` for reference-to-video, never both), then poll `GET https://api.x.ai/v1/videos/{request_id}`
+- Video edits and extensions: `grok-imagine-video` via `POST https://api.x.ai/v1/videos/edits` and `POST https://api.x.ai/v1/videos/extensions`
 
 You only call the local API. The server calls xAI.
 
@@ -126,6 +127,39 @@ curl -s -X POST http://127.0.0.1:8010/api/packs/plan \
   -d '{"prompt":"A fisher leaves the dock as the fog lifts.","target_duration_sec":24,"aspect_ratio":"16:9","resolution":"720p"}'
 ```
 
+### Cast references and music
+
+`cast` is optional. Each entry is `{id, name, role, markers, image_path}`. `role` is `character`, `prop`, or `location`. Upload the image first. The file is stored under `data/references/`. Do not invent a URL.
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/api/references \
+  -H "Authorization: Bearer local-dev-token" \
+  -F "file=@mara.png" \
+  -F "name=Mara" \
+  -F "role=character" \
+  -F "markers=Grey coat, scar on the left brow"
+```
+
+PNG, JPEG, or WebP by magic bytes, max 10 MB. Put the returned object on the pack `cast` list, then `POST /api/packs`. A missing file is `422`. `GET /api/references/{id}` returns the bytes. `DELETE /api/references/{id}` removes the file.
+
+Shot fields, all optional and backward compatible:
+
+- `video_mode`: `image_to_video` (default) or `reference_to_video`. Reference-to-video needs at least one cast image or a `voice_id`. It is sent at 720p even when the pack is `1080p`. The shot `note` records that. The still is not sent as `image` on that mode.
+- `dialogue`: a line folded into the video prompt. There is no dialogue field on the xAI video API.
+- `voice_id`: a preset such as `eve`, `leo`, or `ara`, sent as `reference_audios[].voice_id`. Only valid on `reference_to_video`. Otherwise the pack is `422`. Custom voice audio files are not accepted.
+
+Plan and fill keep a cast you already sent and name those entries in the still and motion lines. Stills use up to 3 images. A first shot with cast is `still_mode: cast_reference`. A later shot still uses the previous last frame (`last_frame_edit`) and includes cast refs while the three-image cap allows.
+
+Music is a local file you upload. The server does not generate or download it.
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/api/music \
+  -H "Authorization: Bearer local-dev-token" \
+  -F "file=@bed.wav"
+```
+
+Wav, mp3, m4a, or ogg, max 20 MB. The response `music_path` can go on the pack. `POST /api/packs/{id}/music` stores a bed on an existing pack and remixes `episode.mp4` from `episode.base.mp4` when the latest job is already `done` and stitched. That remix does not call Imagine. `music_bed_applied` stays false until the mix writes a file.
+
 ## 2. Run
 
 ```bash
@@ -175,6 +209,10 @@ These booleans stay false until the corresponding work has happened. Never set t
 | `called_imagine_video` | `POST /v1/videos/generations` returned |
 | `produced_mp4` | A clip file was written from the downloaded video |
 | `stitched_episode` | ffmpeg concat wrote `episode.mp4` |
+| `has_audio` | ffprobe sees an audio stream on `episode.mp4` |
+| `music_bed_applied` | an uploaded music file was mixed into that episode |
+
+`has_audio` and `music_bed_applied` are false on a stub job. Do not set them from a prompt.
 
 Each object in `shots` repeats the first four flags plus:
 
@@ -183,7 +221,7 @@ Each object in `shots` repeats the first four flags plus:
 - `video_request_id` — the xAI request id, not a media URL
 - `error` — shot-level failure text
 
-On a stub job every gate is false, `episode_path` is null, `continuity_mode` is null, `grade_match` is false, and the JSON contains no `http://` or `https://` URL.
+On a stub job every gate is false, `episode_path` is null, `continuity_mode` is null, `grade_match` is false, `has_audio` is false, `music_bed_applied` is false, and the JSON contains no `http://` or `https://` URL.
 
 `grade_match` is true only when ffmpeg wrote a graded clip and concat used it. A skip leaves it false and explains why in `message`. It is not one of the five Imagine gates.
 
@@ -231,17 +269,46 @@ On-disk layout after a successful live run (under the server data dir, default `
 ```text
 runs/<pack_id>/shots/<shot_id>/still.png
 runs/<pack_id>/shots/<shot_id>/clip.mp4
+runs/<pack_id>/shots/<shot_id>/clip.v1.mp4
+runs/<pack_id>/episode.base.mp4
 runs/<pack_id>/episode.mp4
+references/<id>.png
+music/<id>.wav
 ```
 
-A later run deletes that pack directory before it starts. Historical gates remain on the old job, but paths disappear once the files are gone, and `/episode` follows the latest job only.
+A later run deletes that pack's `runs/` directory before it starts. Historical gates remain on the old job, but paths disappear once the files are gone, and `/episode` follows the latest job only. Reference images and music files stay until you delete them.
+
+## Revise one shot
+
+Only when the job `status` is `done` or `error`. `queued` and `running` are `409`. A `stub` job, or any revise while `XAI_API_KEY` is unset, is `422` and does not call xAI.
+
+```bash
+curl -s -X POST "http://127.0.0.1:8010/api/packs/$PACK_ID/jobs/$JOB_ID/shots/s02/regenerate" \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt_motion":"A slower swell, same boat"}'
+
+curl -s -X POST "http://127.0.0.1:8010/api/packs/$PACK_ID/jobs/$JOB_ID/shots/s02/edit" \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Warm the grade, keep the boat"}'
+
+curl -s -X POST "http://127.0.0.1:8010/api/packs/$PACK_ID/jobs/$JOB_ID/shots/s02/extend" \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Hold on the bow","duration_sec":4}'
+```
+
+Regenerate redoes that shot's still and clip, then restitches. Edit calls `POST /v1/videos/edits`. The input duration is kept. If ffprobe says the clip is longer than 8.7 seconds, the route is `422` and xAI is not called. Extend calls `POST /v1/videos/extensions` and adds 2–10 seconds. Other shots are not re-rendered.
+
+The current deliverable stays `clip.mp4`. The previous file is copied to `clip.vN.mp4`. Read `shots[].revisions` for `version`, `action` (`generate`, `regenerate`, `edit`, `extend`), `clip_path`, and `prompt`. After a successful revise, grade match runs again on the current clips. Clip 1 stays the reference unless clip 1 itself was revised. Archived `clip.vN.mp4` files are not graded. A failed edit or extend that did not replace the clip leaves a `done` job `done`.
 
 ## Continuity the server applies
 
 You do not extract frames yourself, and you do not grade the clips yourself.
 
 - `look_bible` on the pack is injected into every still prompt and every image-to-video prompt. Plan and fill write it. A moderation retry softens shot prose and keeps the bible.
-- ffmpeg present: shot 1 is text-to-image (`still_mode: text_to_image`). Each later still is an image edit seeded by the previous clip's last frame (`still_mode: last_frame_edit`). The edit prompt keeps the same face, body type, clothes, and grade as that frame. Only pose, blocking, and action may change.
+- ffmpeg present: shot 1 with no cast is text-to-image (`still_mode: text_to_image`). Shot 1 with cast images is an image edit of those refs (`still_mode: cast_reference`). Each later still is an image edit seeded by the previous clip's last frame (`still_mode: last_frame_edit`), plus cast refs while the three-image cap allows. The edit prompt keeps the same face, body type, clothes, and grade as that frame. Only pose, blocking, and action may change.
 - Every image-to-video prompt says to continue from that exact still and not to change costume, hair, identity, or lighting.
 - Before concat, ffmpeg may soft-match later clips toward clip 1 with `signalstats` and `eq`. If that filter set is missing, or `OMARCHY_GRADE_MATCH` is off, the job notes the skip and still stitches. `grade_match` is true only when the pass wrote a graded file.
 - ffmpeg absent: every still is text-to-image with the bible and the locked states in the prompt (`prose_regenerate`), and the episode is not stitched. `continuity_mode` on the job is `last_frame_edit` or `prose_regenerate`. A stub job leaves it null.

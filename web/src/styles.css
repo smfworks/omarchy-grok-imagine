@@ -342,6 +342,42 @@ textarea.story {
   min-height: 120px;
 }
 
+.cast-list {
+  display: grid;
+  gap: 12px;
+  margin: 12px 0 16px;
+}
+
+.cast-card {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.cast-preview {
+  width: 96px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #0e1016;
+}
+
+.revise {
+  flex-basis: 100%;
+  margin-top: 8px;
+}
+
+.versions {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
 footer {
   color: var(--muted);
   font-size: 0.85rem;

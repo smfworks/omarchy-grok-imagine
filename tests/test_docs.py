@@ -51,6 +51,25 @@ def test_docs_cover_director_craft() -> None:
         assert "action_duel" in text
 
 
+def test_docs_cover_phase2() -> None:
+    for relative in (
+        "README.md",
+        ".cursor/skills/omarchy-imagine/SKILL.md",
+        "docs/agent-skill.md",
+    ):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        assert "/api/references" in text
+        assert "reference_to_video" in text
+        assert "voice_id" in text
+        assert "/regenerate" in text
+        assert "8.7" in text
+        assert "has_audio" in text
+        assert "music_bed_applied" in text
+        assert "/api/music" in text
+        assert "clip.v" in text
+    assert (ROOT / "docs/phase2.md").is_file()
+
+
 def test_docs_cover_the_director_brief() -> None:
     for relative in (
         "README.md",

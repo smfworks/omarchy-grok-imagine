@@ -19,6 +19,7 @@ from typing import Protocol
 import httpx
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from omarchy_imagine.castref import ensure_cast_names
 from omarchy_imagine.config import (
     ASPECT_RATIOS,
     DEFAULT_TEXT_TIMEOUT_SEC,
@@ -50,6 +51,7 @@ from omarchy_imagine.schema import (
     CAMERA_MOVES,
     CAMERA_SCALES,
     STYLE_PRESETS,
+    CastRef,
     LookBible,
     PackIn,
     coerce_token,
@@ -73,6 +75,8 @@ class PlanIn(BaseModel):
     resolution: str | None = None
     title: str | None = None
     style_preset: str | None = None
+    cast: list[CastRef] = Field(default_factory=list)
+    music_path: str = ""
 
     @field_validator("prompt")
     @classmethod
@@ -146,6 +150,7 @@ class PlanBrief:
     durations: tuple[int, ...]
     style_preset: str
     grammar: tuple[ShotGrammar, ...]
+    cast_names: str = ""
 
 
 class StoryCamera(BaseModel):
@@ -254,6 +259,7 @@ def plan_pack(body: PlanIn, planner: TextPlanner | None = None) -> PackIn:
         durations=tuple(durations),
         style_preset=style,
         grammar=grammar,
+        cast_names=_cast_names(body.cast),
     )
     story = planner.plan_story(brief)
     return _pack_from_story(body, durations, story, aspect, resolution, style)
@@ -362,6 +368,8 @@ def _heuristic_pack(
                 aspect_ratio=aspect,
                 resolution=resolution,
                 shot_count=len(durations),
+                cast=body.cast,
+                music_path=body.music_path,
             )
         )
     except FillError as exc:
@@ -374,6 +382,7 @@ def _heuristic_pack(
         shot["duration_sec"] = duration
     apply_heuristic_craft(draft, style, prompt)
     _soften_and_lock(draft)
+    _mention_cast(draft, body)
     return _validate_pack(draft)
 
 
@@ -434,18 +443,18 @@ def _pack_from_story(
     )
     for item in beat_map:
         item["summary"] = soften_wording(item["summary"])
-    return _validate_pack(
-        {
-            "title": title,
-            "logline": logline,
-            "aspect_ratio": aspect,
-            "resolution": resolution,
-            "style_preset": style,
-            "beat_map": beat_map,
-            "look_bible": bible.model_dump(),
-            "shots": shots,
-        }
-    )
+    draft = {
+        "title": title,
+        "logline": logline,
+        "aspect_ratio": aspect,
+        "resolution": resolution,
+        "style_preset": style,
+        "beat_map": beat_map,
+        "look_bible": bible.model_dump(),
+        "shots": shots,
+    }
+    _mention_cast(draft, body)
+    return _validate_pack(draft)
 
 
 def complete_look_bible(
@@ -492,6 +501,31 @@ def _soften_and_lock(draft: dict[str, object]) -> None:
                 camera["exit_frame"] = shot["end_state"]
     for index in range(1, len(shots)):
         shots[index]["start_state"] = shots[index - 1]["end_state"]
+
+
+def _cast_names(cast: list[CastRef]) -> str:
+    parts: list[str] = []
+    for item in cast:
+        label = f"{item.name} ({item.role}"
+        if item.markers:
+            label += f", {item.markers}"
+        label += ")"
+        parts.append(label)
+    return "; ".join(parts)
+
+
+def _mention_cast(draft: dict[str, object], body: PlanIn) -> None:
+    cast = [item.model_dump() for item in body.cast]
+    draft["cast"] = cast
+    draft["music_path"] = body.music_path.strip()
+    shots = draft.get("shots")
+    if not isinstance(shots, list):
+        return
+    for shot in shots:
+        if not isinstance(shot, dict):
+            continue
+        shot["prompt_still"] = ensure_cast_names(str(shot.get("prompt_still") or ""), cast)
+        shot["prompt_motion"] = ensure_cast_names(str(shot.get("prompt_motion") or ""), cast)
 
 
 def _validate_pack(draft: dict[str, object]) -> PackIn:
@@ -561,6 +595,12 @@ def _messages(brief: PlanBrief) -> list[dict[str, str]]:
             "Put the exit frame in camera.exit_frame and match it with end_state.",
         ]
     )
+    if brief.cast_names:
+        user = (
+            user
+            + "\nNamed cast. Mention each name in every prompt_still and prompt_motion: "
+            + brief.cast_names
+        )
     return [
         {
             "role": "system",
@@ -583,6 +623,8 @@ def _messages(brief: PlanBrief) -> list[dict[str, str]]:
                 "Alternate scale across the pack. Use a Dutch angle only when the card says dutch. "
                 "exit_frame names the picture the next shot must open on, so a last-frame edit "
                 "can start clean. end_state matches that exit frame. "
+                "When the user message lists named cast, use those names in every "
+                "prompt_still and every prompt_motion. "
                 "opening_state is the picture at the start of the first shot. "
                 "Keep the chain continuous. Write family-safe prose: no blood, gore, "
                 "death, or injury. A clash is bloodless choreography that ends in "
