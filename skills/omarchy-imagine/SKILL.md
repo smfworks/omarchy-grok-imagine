@@ -1,0 +1,1 @@
+../../.cursor/skills/omarchy-imagine/SKILL.md
