@@ -59,6 +59,10 @@ export async function fetchHealth(): Promise<Health> {
   return (await response.json()) as Health;
 }
 
+export async function fillPack(pack: PackDraft): Promise<PackDraft> {
+  return request("/api/packs/fill", { method: "POST", body: JSON.stringify(pack) });
+}
+
 export async function createPack(pack: PackDraft): Promise<{ id: string }> {
   return request("/api/packs", { method: "POST", body: JSON.stringify(pack) });
 }

@@ -53,6 +53,27 @@ A last-frame seed keeps wardrobe, lighting, and blocking attached to a real pixe
 
 When both are non-empty, shot N `start_state` must equal shot N-1 `end_state`.
 
+## Fill blanks
+
+A pack needs still and motion prompts before it can run. If you only have a title and/or a logline, the wizard and the API can fill the empty shot fields from that description.
+
+`POST /api/packs/fill` accepts a partial pack, or just `{title, logline, shot_count?}`. It returns a pack draft. It does not save the pack, call Imagine, or add media URLs. The same bearer token as the other pack routes is required.
+
+The fill is a deterministic heuristic. It does not need `XAI_API_KEY`. Text you already typed is kept. Empty `prompt_still`, `prompt_motion`, `start_state`, and `end_state` values are written from the logline (or the title, when the logline is blank). Aspect, resolution, and `duration_sec` stay as you set them; omitted values stay at `16:9`, `720p`, and 8 seconds. Omitted `shot_count` with no shots creates two shots. A `shot_count` smaller than the shots you sent does not drop those shots.
+
+Continuity is a locked chain: shot N `start_state` equals shot N-1 `end_state`. If you already set one side of that boundary, the blank side copies it. If both sides are set and they differ, the route is `422` and neither side is rewritten.
+
+In the wizard, **Fill blanks from logline** does that fill and leaves the draft on screen. **Run** does the same fill first when a title or logline is present and any of those shot fields is still blank, then creates the pack and starts the job.
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/api/packs/fill \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Harbor dawn","logline":"A fisher leaves the dock as the fog lifts.","shot_count":2}'
+```
+
+The JSON that comes back is a valid `POST /api/packs` body.
+
 ## Honesty gates
 
 Each job exposes booleans that stay false until that work has happened:
@@ -106,12 +127,19 @@ npm run preview
 
 `scripts/run.sh` starts the API and then `npm run preview` for the built wizard. It sources `.env` when that file exists.
 
-Optional desktop entry (the servers still have to be running):
+Desktop launcher. This opens a chrome-free window (an Omarchy web app, or Chromium `--app=`) instead of a full browser. The script sources `.env` and `.venv` when they exist, starts uvicorn on `:8010` and `npm run preview` on `:5180` if those ports are down, then focuses the window.
 
 ```bash
-mkdir -p ~/.local/share/applications
+chmod +x scripts/omarchy-grok-imagine.sh
+mkdir -p ~/.local/bin ~/.local/share/applications
+ln -sfn "$(pwd)/scripts/omarchy-grok-imagine.sh" ~/.local/bin/omarchy-grok-imagine
 cp packaging/omarchy-grok-imagine.desktop ~/.local/share/applications/
+update-desktop-database ~/.local/share/applications/ || true
 ```
+
+`Exec=omarchy-grok-imagine` expects that symlink on `PATH`. If the app menu does not see `~/.local/bin`, set `Exec` in the copied desktop file to the absolute script path. `StartupWMClass` is `OmarchyGrokImagine`, the same class the launcher passes to Chromium.
+
+Launch order, matching Overwatch: `omarchy-launch-or-focus-webapp`, then `omarchy-launch-webapp`, then Chromium or Chrome `--app=` with `--class=OmarchyGrokImagine`, then `xdg-open`. You can also run `scripts/omarchy-grok-imagine.sh` by absolute path. `scripts/run.sh` is still the foreground terminal helper.
 
 Artifacts, when a live run produces them:
 
@@ -181,7 +209,6 @@ Useful environment variables:
 Not in Phase 1:
 
 - Hermes Desktop pane
-- Omarchy `--app=` packaging polish
 - Cost estimator UI
 - Multi-episode seasons
 - Imagine video editing, extension, and reference-to-video APIs

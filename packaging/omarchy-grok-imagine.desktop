@@ -1,9 +1,11 @@
 [Desktop Entry]
+Version=1.0
 Type=Application
 Name=Omarchy Grok Imagine
 Comment=Grok Imagine stills and clips, ffmpeg episode stitch
-Exec=xdg-open http://127.0.0.1:5180
+Exec=omarchy-grok-imagine
 Icon=video-x-generic
 Terminal=false
 Categories=AudioVideo;Video;
 StartupNotify=true
+StartupWMClass=OmarchyGrokImagine

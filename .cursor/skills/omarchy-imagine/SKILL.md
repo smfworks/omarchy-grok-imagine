@@ -81,6 +81,19 @@ Save `id` as `PACK_ID`.
 
 `GET /api/packs` lists packs. `GET /api/packs/$PACK_ID` fetches one. Both need the bearer token. Unknown ids are `404`.
 
+### Fill blanks
+
+`POST /api/packs/fill` turns a title and/or logline into a runnable draft. It does not save a pack, does not call Imagine, and does not add media URLs. `XAI_API_KEY` is not required. Non-empty `prompt_still`, `prompt_motion`, `start_state`, and `end_state` stay as written. Empty ones are filled so shot N `start_state` equals shot N-1 `end_state`. Aspect, resolution, and duration stay when you set them.
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/api/packs/fill \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Harbor dawn","logline":"A fisher leaves the dock as the fog lifts.","shot_count":2}'
+```
+
+Send the response body to `POST /api/packs` to save it. A continuity mismatch that is already present on both sides is `422`; the fill does not overwrite either side.
+
 ## 2. Run
 
 ```bash

@@ -13,6 +13,7 @@ from omarchy_imagine import __version__
 from omarchy_imagine.config import IMAGE_MODEL, LOCAL_DEV_TOKEN, VIDEO_MODEL
 from omarchy_imagine.db import JobInProgress, Store
 from omarchy_imagine.ffmpeg_util import ffmpeg_path
+from omarchy_imagine.fill import FillError, FillIn, fill_pack
 from omarchy_imagine.imagine import ImagineClient
 from omarchy_imagine.pipeline import run_pack_job
 from omarchy_imagine.schema import JobsOut, PackIn, PackOut, RunOut
@@ -69,6 +70,19 @@ def create_app() -> FastAPI:
             "video_model": VIDEO_MODEL,
             "continuity": "last_frame_edit" if ffmpeg_ready else "prose_regenerate",
         }
+
+    @app.post("/api/packs/fill", response_model=PackIn)
+    def fill_pack_route(body: FillIn, _: None = Depends(_bearer)) -> PackIn:
+        """Fill blank prompts and continuity states from the title and logline.
+
+        Does not persist a pack, call Imagine, or invent media URLs.
+        Non-empty user text is kept. Aspect, resolution, and duration stay
+        as sent when they are already set.
+        """
+        try:
+            return fill_pack(body)
+        except FillError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/api/packs", response_model=PackOut, status_code=201)
     def create_pack(pack: PackIn, _: None = Depends(_bearer)) -> dict:
