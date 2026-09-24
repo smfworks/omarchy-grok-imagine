@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createPack, downloadEpisode, fetchHealth, fetchJobs, runPack } from "./api";
+import { createPack, downloadEpisode, fetchHealth, fetchJobs, fillPack, runPack } from "./api";
 import { examplePack } from "./example";
 import { ASPECTS, GATES, RESOLUTIONS, type Health, type Job, type PackDraft, type ShotDraft } from "./types";
 
@@ -23,6 +23,20 @@ function nextShotId(shots: ShotDraft[]): string {
     }
   }
   return `s${shots.length + 1}`;
+}
+
+function hasBlanks(pack: PackDraft): boolean {
+  return pack.shots.some(
+    (shot) =>
+      !shot.prompt_still.trim() ||
+      !shot.prompt_motion.trim() ||
+      !shot.start_state.trim() ||
+      !shot.end_state.trim(),
+  );
+}
+
+function canDescribe(pack: PackDraft): boolean {
+  return Boolean(pack.title.trim() || pack.logline.trim());
 }
 
 function validate(pack: PackDraft): string | null {
@@ -176,16 +190,42 @@ export function App() {
     });
   }
 
-  async function onRun() {
-    const problem = validate(draft);
-    if (problem) {
-      setError(problem);
+  async function fillFromDescription(pack: PackDraft): Promise<PackDraft> {
+    const filled = await fillPack(payload(pack));
+    setDraft(filled);
+    return filled;
+  }
+
+  async function onFill() {
+    if (!canDescribe(draft)) {
+      setError("Add a title or logline before filling blanks.");
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const created = await createPack(payload(draft));
+      await fillFromDescription(draft);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not fill blanks");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRun() {
+    setBusy(true);
+    setError(null);
+    try {
+      let current = draft;
+      if (canDescribe(current) && hasBlanks(current)) {
+        current = await fillFromDescription(current);
+      }
+      const problem = validate(current);
+      if (problem) {
+        setError(problem);
+        return;
+      }
+      const created = await createPack(payload(current));
       setPackId(created.id);
       setJobs([]);
       await runPack(created.id);
@@ -285,7 +325,9 @@ export function App() {
         <h2>Shots</h2>
         <p className="note">
           When both are set, a shot&apos;s start state must match the previous shot&apos;s end state.
-          Duration is 1–15 seconds. Default is 8.
+          Duration is 1–15 seconds. Default is 8. Fill blanks writes empty still prompts, motion
+          prompts, and a locked start/end chain from the title and logline. Text you already typed
+          stays. Run does the same fill when any of those fields are still blank.
         </p>
         {draft.shots.map((shot, index) => (
           <article className="shot" key={`${shot.id}-${index}`}>
@@ -355,11 +397,14 @@ export function App() {
           </article>
         ))}
         <div className="actions">
-          <button type="button" onClick={addShot}>
+          <button type="button" onClick={addShot} disabled={busy}>
             Add shot
           </button>
-          <button type="button" onClick={() => setDraft(examplePack)}>
+          <button type="button" onClick={() => setDraft(examplePack)} disabled={busy}>
             Load example
+          </button>
+          <button type="button" onClick={() => void onFill()} disabled={busy || running}>
+            Fill blanks from logline
           </button>
           <button type="button" className="primary" onClick={() => void onRun()} disabled={busy || running}>
             {busy ? "Sending…" : "Run"}

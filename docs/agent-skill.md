@@ -15,6 +15,15 @@ curl -s -X POST http://127.0.0.1:8010/api/packs \
   -d '{"title":"Harbor dawn","logline":"Fog lifts.","aspect_ratio":"16:9","resolution":"720p","shots":[{"id":"s01","prompt_still":"A quiet harbor at dawn","prompt_motion":"The boat eases off the dock","duration_sec":8,"end_state":"The boat is offshore.","start_state":""}]}'
 ```
 
+Fill blanks (`POST /api/packs/fill`) when the pack only has a title and/or logline. The response is a draft, not a saved pack. Empty still prompts, motion prompts, and continuity states are filled. Text that is already set is kept. No Imagine call, and no media URLs. Post that JSON to `POST /api/packs` when you want to save it.
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/api/packs/fill \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Harbor dawn","logline":"Fog lifts.","shot_count":2}'
+```
+
 Run (`POST /api/packs/$PACK_ID/run`). The body comes back with `status: queued`. Poll until the newest job is `stub`, `done`, or `error`:
 
 ```bash

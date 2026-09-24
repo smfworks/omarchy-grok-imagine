@@ -32,3 +32,30 @@ def test_skill_documents_the_http_flow() -> None:
     assert "https://docs.x.ai/developers/model-capabilities/images/generation" in readme
     assert "https://docs.x.ai/developers/model-capabilities/video/image-to-video" in readme
     assert "MIT" in (ROOT / "LICENSE").read_text(encoding="utf-8")
+
+
+def test_readme_and_desktop_document_fill_and_the_app_launcher() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    desktop = (ROOT / "packaging/omarchy-grok-imagine.desktop").read_text(encoding="utf-8")
+    script = (ROOT / "scripts/omarchy-grok-imagine.sh").read_text(encoding="utf-8")
+    assert "/api/packs/fill" in readme
+    assert "Fill blanks" in readme
+    assert "omarchy-grok-imagine.sh" in readme
+    assert "StartupWMClass=OmarchyGrokImagine" in desktop
+    assert "Exec=omarchy-grok-imagine" in desktop
+    assert "xdg-open http://127.0.0.1:5180" not in desktop
+    order = [
+        "omarchy-launch-or-focus-webapp",
+        "omarchy-launch-webapp",
+        '--app="${WEB_URL}"',
+        "xdg-open",
+    ]
+    position = -1
+    for token in order:
+        found = script.find(token, position + 1)
+        assert found > position, token
+        position = found
+    assert "OmarchyGrokImagine" in script
+    assert "8010" in script
+    assert "5180" in script
+    assert script.startswith("#!/usr/bin/env bash\n")
