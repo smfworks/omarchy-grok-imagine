@@ -2,7 +2,17 @@ import { useEffect, useState } from "react";
 import { createPack, downloadEpisode, fetchHealth, fetchJobs, fillPack, planPack, runPack } from "./api";
 import { examplePack } from "./example";
 import { DURATION_PRESETS, MAX_PLAN_TARGET_SEC, MIN_PLAN_TARGET_SEC, planEstimate } from "./planMath";
-import { ASPECTS, GATES, RESOLUTIONS, type Health, type Job, type PackDraft, type ShotDraft } from "./types";
+import {
+  ASPECTS,
+  GATES,
+  RESOLUTIONS,
+  emptyLookBible,
+  type Health,
+  type Job,
+  type LookBible,
+  type PackDraft,
+  type ShotDraft,
+} from "./types";
 
 type Mode = "simple" | "advanced";
 
@@ -83,6 +93,13 @@ function payload(pack: PackDraft): PackDraft {
     logline: pack.logline.trim(),
     aspect_ratio: pack.aspect_ratio,
     resolution: pack.resolution,
+    look_bible: {
+      cast: pack.look_bible.cast.trim(),
+      wardrobe: pack.look_bible.wardrobe.trim(),
+      palette: pack.look_bible.palette.trim(),
+      lighting: pack.look_bible.lighting.trim(),
+      camera: pack.look_bible.camera.trim(),
+    },
     shots: pack.shots.map((shot) => ({
       id: shot.id.trim(),
       prompt_still: shot.prompt_still.trim(),
@@ -100,6 +117,7 @@ export function App() {
     logline: "",
     aspect_ratio: "16:9",
     resolution: "720p",
+    look_bible: emptyLookBible(),
     shots: [emptyShot("s01")],
   });
   const [health, setHealth] = useState<Health | null>(null);
@@ -164,6 +182,13 @@ export function App() {
   const estimate = planEstimate(targetSec);
   const showEditor = mode === "advanced" || planned;
 
+  function updateBible(patch: Partial<LookBible>) {
+    setDraft((current) => ({
+      ...current,
+      look_bible: { ...current.look_bible, ...patch },
+    }));
+  }
+
   function updateShot(index: number, patch: Partial<ShotDraft>) {
     setDraft((current) => ({
       ...current,
@@ -201,8 +226,15 @@ export function App() {
     });
   }
 
+  function adoptPack(pack: PackDraft): PackDraft {
+    return {
+      ...pack,
+      look_bible: { ...emptyLookBible(), ...(pack.look_bible ?? {}) },
+    };
+  }
+
   async function fillFromDescription(pack: PackDraft): Promise<PackDraft> {
-    const filled = await fillPack(payload(pack));
+    const filled = adoptPack(await fillPack(payload(pack)));
     setDraft(filled);
     return filled;
   }
@@ -235,7 +267,7 @@ export function App() {
         resolution: draft.resolution,
         ...(title ? { title } : {}),
       });
-      setDraft(filled);
+      setDraft(adoptPack(filled));
       setPlanned(true);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not plan the pack");
@@ -492,6 +524,52 @@ export function App() {
 
       {showEditor ? (
       <section className="panel">
+        <h2>Look bible</h2>
+        <p className="note">
+          Locked for the whole pack. Every still and every motion prompt repeats these lines.
+          Plan and Fill blanks write them. A moderation retry softens the shot text and keeps
+          this block.
+        </p>
+        <label className="field">
+          <span>Cast</span>
+          <textarea
+            value={draft.look_bible.cast}
+            onChange={(event) => updateBible({ cast: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>Wardrobe</span>
+          <textarea
+            value={draft.look_bible.wardrobe}
+            onChange={(event) => updateBible({ wardrobe: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>Palette</span>
+          <textarea
+            value={draft.look_bible.palette}
+            onChange={(event) => updateBible({ palette: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>Lighting</span>
+          <textarea
+            value={draft.look_bible.lighting}
+            onChange={(event) => updateBible({ lighting: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>Camera</span>
+          <textarea
+            value={draft.look_bible.camera}
+            onChange={(event) => updateBible({ camera: event.target.value })}
+          />
+        </label>
+      </section>
+      ) : null}
+
+      {showEditor ? (
+      <section className="panel">
         <h2>Shots</h2>
         <p className="note">
           When both are set, a shot&apos;s start state must match the previous shot&apos;s end state.
@@ -595,12 +673,19 @@ export function App() {
           <>
             <p className="note">
               Status <span className="status">{latest.status}</span>
-              {latest.continuity_mode ? ` · ${latest.continuity_mode}` : ""}
+              {` · continuity ${latest.continuity_mode ?? "not set"}`}
+              {` · grade match ${latest.grade_match ? "ran" : "did not run"}`}
               {packId ? ` · pack ${packId}` : ""}
             </p>
             {latest.message ? <p className="note">{latest.message}</p> : null}
             {latest.error ? <p className="banner error">{latest.error}</p> : null}
             <div className="gates">
+              <div className="gate">
+                <span>Grade match</span>
+                <b className={latest.grade_match ? "yes" : "no"}>
+                  {latest.grade_match ? "ran" : "did not run"}
+                </b>
+              </div>
               {GATES.map(([key, label]) => {
                 const value = latest[key];
                 return (
@@ -618,7 +703,7 @@ export function App() {
                 <span>file {shot.produced_still ? "yes" : "no"}</span>
                 <span>video {shot.called_imagine_video ? "called" : "not called"}</span>
                 <span>clip {shot.produced_mp4 ? "yes" : "no"}</span>
-                {shot.still_mode ? <span>{shot.still_mode}</span> : null}
+                <span>still mode {shot.still_mode ?? "not set"}</span>
                 {shot.still_path ? <code>{shot.still_path}</code> : null}
                 {shot.clip_path ? <code>{shot.clip_path}</code> : null}
                 {shot.error ? <span>{shot.error}</span> : null}

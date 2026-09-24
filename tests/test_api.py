@@ -91,6 +91,7 @@ def test_stub_dry_run_keeps_gates_false_and_invents_no_urls(client, app) -> None
     assert job["stitched_episode"] is False
     assert job["episode_path"] is None
     assert job["continuity_mode"] is None
+    assert job["grade_match"] is False
     assert "XAI_API_KEY" in job["message"]
     for shot in job["shots"]:
         assert shot["called_imagine_still"] is False

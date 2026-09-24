@@ -5,9 +5,13 @@ Continuity when ffmpeg is on PATH (``last_frame_edit``):
 1. Shot 1 still is text-to-image (``POST /v1/images/generations``).
 2. That still is the image-to-video first frame (``POST /v1/videos/generations``).
 3. ffmpeg extracts the clip's last frame.
-4. The next still is an image edit (``POST /v1/images/edits``) seeded by that frame,
-   with the shot prompt and locked start/end state in the edit prompt.
-5. Repeat. ffmpeg concat writes ``episode.mp4``. Imagine is not used to stitch.
+4. The next still is an image edit (``POST /v1/images/edits``) seeded by that frame.
+   The edit prompt keeps the look bible and the source frame's face, clothes,
+   and grade. Only pose, blocking, and action may change.
+5. Every image-to-video prompt repeats the look bible and tells the model to
+   animate that still without changing costume, hair, identity, or lighting.
+6. Before concat, ffmpeg may soft-match later clips toward clip 1. A missing
+   filter skips that pass and still stitches. Imagine is not used to stitch.
 
 When ffmpeg is missing (``prose_regenerate``), every still is text-to-image and
 the locked states are written into the prompt. ``stitched_episode`` stays false
@@ -31,6 +35,7 @@ from omarchy_imagine.db import Store, aggregate_gates
 from omarchy_imagine.ffmpeg_util import FfmpegError, FfmpegNotFound
 from omarchy_imagine.imagine import ImagineClient, ImagineError
 from omarchy_imagine.moderate import MAX_MODERATION_RETRIES, soften_prompts
+from omarchy_imagine.schema import render_look_bible
 
 logger = logging.getLogger("omarchy_imagine")
 
@@ -106,19 +111,45 @@ def run_pack_job(
         client.close()
 
 
-def build_still_prompt(shot: dict[str, Any], *, seeded: bool) -> str:
+SEEDED_STILL_CONTRACT = (
+    "Use the provided frame as the exact visual source. "
+    "Keep the same face, the same body type, the same clothes, "
+    "and the same color grade and lighting as that source frame. "
+    "Only pose, blocking, and action may change, and only as the still prompt "
+    "and the locked end state require."
+)
+
+MOTION_SEED_LOCK = (
+    "Continue from this exact still. "
+    "Do not change costume, hair, identity, or lighting. "
+    "Only animate the described motion."
+)
+
+
+def build_still_prompt(shot: dict[str, Any], *, seeded: bool, look_bible: str = "") -> str:
     parts: list[str] = []
+    bible = look_bible.strip()
+    if bible:
+        parts.append(bible)
     if seeded:
-        parts.append(
-            "Use the provided frame as the exact opening of this shot. "
-            "Preserve identity, wardrobe, lighting, and setting. "
-            "Advance the image only as far as the still prompt and end state require."
-        )
+        parts.append(SEEDED_STILL_CONTRACT)
     parts.append(str(shot["prompt_still"]).strip())
     if str(shot.get("start_state") or "").strip():
         parts.append(f"Locked start state: {shot['start_state'].strip()}")
     if str(shot.get("end_state") or "").strip():
         parts.append(f"Locked end state: {shot['end_state'].strip()}")
+    return "\n\n".join(parts)
+
+
+def build_motion_prompt(shot: dict[str, Any], *, look_bible: str = "") -> str:
+    parts: list[str] = []
+    bible = look_bible.strip()
+    if bible:
+        parts.append(bible)
+    parts.append(MOTION_SEED_LOCK)
+    motion = str(shot.get("prompt_motion") or "").strip()
+    if motion:
+        parts.append(motion)
     return "\n\n".join(parts)
 
 
@@ -168,6 +199,7 @@ def _run_live(
     ]
     _persist(store, job_id, records, stitched=False, episode_rel=None)
     image_resolution = image_resolution_for(pack["resolution"])
+    bible = render_look_bible(pack.get("look_bible"))
     last_frame: Path | None = None
     clip_paths: list[Path] = []
 
@@ -186,6 +218,7 @@ def _run_live(
             shot_dir,
             seed_frame,
             image_resolution,
+            bible,
         )
         clip_paths.append(clip_path)
 
@@ -203,20 +236,45 @@ def _run_live(
 
     episode_path = store.episode_file(pack["id"])
     try:
-        ffmpeg_util.stitch_clips(clip_paths, episode_path)
+        graded = ffmpeg_util.match_grade(clip_paths)
+    except Exception as exc:
+        logger.warning("grade match skipped after an unexpected error: %s", exc)
+        graded = ffmpeg_util.GradeMatch(
+            list(clip_paths),
+            False,
+            f"Grade match skipped: {exc}. Clips were concatenated unchanged.",
+        )
+    _persist(
+        store,
+        job_id,
+        records,
+        stitched=False,
+        episode_rel=None,
+        grade_match=graded.ran,
+    )
+    try:
+        ffmpeg_util.stitch_clips(graded.clips, episode_path)
     except (FfmpegError, FfmpegNotFound):
         if episode_path.exists():
             episode_path.unlink()
+        store.update_job(job_id, message=graded.note)
         raise
     episode_rel = store.rel(episode_path)
-    _persist(store, job_id, records, stitched=True, episode_rel=episode_rel)
+    _persist(
+        store,
+        job_id,
+        records,
+        stitched=True,
+        episode_rel=episode_rel,
+        grade_match=graded.ran,
+    )
     store.update_job(
         job_id,
         status="done",
         error=None,
-        message="Episode stitched with ffmpeg.",
+        message=f"Episode stitched with ffmpeg. {graded.note}",
         shots=records,
-        gates=aggregate_gates(records, stitched=True),
+        gates=aggregate_gates(records, stitched=True, grade_match=graded.ran),
         episode_path=episode_rel,
     )
     logger.info("job %s done episode=%s", job_id, episode_rel)
@@ -233,6 +291,7 @@ def _render_shot(
     shot_dir: Path,
     seed_frame: Path | None,
     image_resolution: str,
+    look_bible: str,
 ) -> Path:
     """Render one shot, softening and resubmitting when moderation rejects it.
 
@@ -251,6 +310,11 @@ def _render_shot(
         prompt = build_still_prompt(
             {**shot, "prompt_still": working_still},
             seeded=seed_frame is not None,
+            look_bible=look_bible,
+        )
+        motion_prompt = build_motion_prompt(
+            {**shot, "prompt_motion": working_motion},
+            look_bible=look_bible,
         )
         try:
             if seed_frame is not None:
@@ -302,7 +366,7 @@ def _render_shot(
 
         try:
             clip_bytes, request_id = client.image_to_video(
-                prompt=working_motion,
+                prompt=motion_prompt,
                 image=still_path.read_bytes(),
                 duration_sec=int(shot["duration_sec"]),
                 aspect_ratio=pack["aspect_ratio"],
@@ -393,10 +457,11 @@ def _persist(
     *,
     stitched: bool,
     episode_rel: str | None,
+    grade_match: bool = False,
 ) -> None:
     store.update_job(
         job_id,
         shots=records,
-        gates=aggregate_gates(records, stitched=stitched),
+        gates=aggregate_gates(records, stitched=stitched, grade_match=grade_match),
         episode_path=episode_rel,
     )

@@ -191,9 +191,17 @@ def test_last_frame_seed_and_ffmpeg_stitch(client, app, monkeypatch, tmp_path) -
     edit = next(item for item in bodies if item["path"].endswith("/images/edits"))
     assert edit["json"]["image"]["url"].startswith("data:image/")
     assert "Locked start state:" in edit["json"]["prompt"]
-    video = next(item for item in bodies if item["path"].endswith("/videos/generations"))
-    assert video["json"]["model"] == "grok-imagine-video-1.5"
-    assert video["json"]["image"]["url"].startswith("data:image/png;base64,")
+    assert "same face" in edit["json"]["prompt"]
+    assert "Only pose, blocking, and action may change" in edit["json"]["prompt"]
+    opening = next(item for item in bodies if item["path"].endswith("/images/generations"))
+    assert "Only pose, blocking, and action may change" not in opening["json"]["prompt"]
+    videos = [item for item in bodies if item["path"].endswith("/videos/generations")]
+    assert videos[0]["json"]["model"] == "grok-imagine-video-1.5"
+    assert videos[0]["json"]["image"]["url"].startswith("data:image/png;base64,")
+    assert "Continue from this exact still" in videos[0]["json"]["prompt"]
+    assert "Do not change costume, hair, identity, or lighting" in videos[1]["json"]["prompt"]
+    assert job["grade_match"] is True
+    assert "Grade match ran" in job["message"]
 
     episode = client.get(f"/api/packs/{pack_id}/episode", headers=AUTH)
     assert episode.status_code == 200

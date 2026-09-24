@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from omarchy_imagine.config import (
     ASPECT_RATIOS,
@@ -33,9 +33,9 @@ from omarchy_imagine.config import (
     VIDEO_RESOLUTIONS,
     XAI_API_BASE,
 )
-from omarchy_imagine.fill import FillError, FillIn, fill_pack
+from omarchy_imagine.fill import FillError, FillIn, build_look_bible, fill_pack
 from omarchy_imagine.moderate import soften_wording
-from omarchy_imagine.schema import PackIn
+from omarchy_imagine.schema import LookBible, PackIn
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
@@ -132,6 +132,7 @@ class StoryDraft(BaseModel):
     title: str = ""
     logline: str = ""
     opening_state: str = ""
+    look_bible: LookBible = Field(default_factory=LookBible)
     shots: list[StoryShot]
 
     @field_validator("title", "logline", "opening_state")
@@ -352,20 +353,36 @@ def _pack_from_story(
     shots[0]["start_state"] = opening
     for index in range(1, len(shots)):
         shots[index]["start_state"] = shots[index - 1]["end_state"]
+    bible = complete_look_bible(story.look_bible, title, logline)
     return _validate_pack(
         {
             "title": title,
             "logline": logline,
             "aspect_ratio": aspect,
             "resolution": resolution,
+            "look_bible": bible.model_dump(),
             "shots": shots,
         }
     )
 
 
+def complete_look_bible(bible: LookBible, title: str, logline: str) -> LookBible:
+    """Keep model lines that are set. Fill blanks from the heuristic, then soften."""
+    fallback = build_look_bible(title, logline).model_dump()
+    merged: dict[str, str] = {}
+    for key, value in bible.model_dump().items():
+        chosen = str(value).strip() or str(fallback[key])
+        merged[key] = soften_wording(chosen)
+    return LookBible.model_validate(merged)
+
+
 def _soften_and_lock(draft: dict[str, object]) -> None:
     draft["title"] = soften_wording(str(draft["title"]))
     draft["logline"] = soften_wording(str(draft["logline"]))
+    bible = draft.get("look_bible")
+    if isinstance(bible, dict):
+        for key in ("cast", "wardrobe", "palette", "lighting", "camera"):
+            bible[key] = soften_wording(str(bible.get(key, "")))
     shots = draft["shots"]
     if not isinstance(shots, list):
         return
@@ -431,6 +448,10 @@ def _messages(brief: PlanBrief) -> list[dict[str, str]]:
                 "prompt_motion is how the camera and the subject move during that clip. "
                 "end_state is one sentence that describes the picture at the end of the clip. "
                 "opening_state is the picture at the start of the first shot. "
+                "look_bible locks the whole film: cast is the same face and body, "
+                "wardrobe is the same clothes, palette is the colors, lighting is the "
+                "key light, and camera is the film stock and lens. Every shot uses that "
+                "bible unchanged. "
                 "Keep the chain continuous. Write family-safe prose: no blood, gore, "
                 "death, or injury. A clash is a choreographed duel that ends in "
                 "exhaustion and victory. Do not include URLs or durations."
@@ -451,6 +472,18 @@ def _story_schema(shot_count: int) -> dict[str, object]:
         },
         "required": ["prompt_still", "prompt_motion", "end_state"],
     }
+    bible = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "cast": {"type": "string"},
+            "wardrobe": {"type": "string"},
+            "palette": {"type": "string"},
+            "lighting": {"type": "string"},
+            "camera": {"type": "string"},
+        },
+        "required": ["cast", "wardrobe", "palette", "lighting", "camera"],
+    }
     return {
         "type": "object",
         "additionalProperties": False,
@@ -458,6 +491,7 @@ def _story_schema(shot_count: int) -> dict[str, object]:
             "title": {"type": "string"},
             "logline": {"type": "string"},
             "opening_state": {"type": "string"},
+            "look_bible": bible,
             "shots": {
                 "type": "array",
                 "minItems": shot_count,
@@ -465,7 +499,7 @@ def _story_schema(shot_count: int) -> dict[str, object]:
                 "items": shot,
             },
         },
-        "required": ["title", "logline", "opening_state", "shots"],
+        "required": ["title", "logline", "opening_state", "look_bible", "shots"],
     }
 
 
