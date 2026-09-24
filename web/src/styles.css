@@ -251,6 +251,21 @@ button:disabled {
   color: var(--ink);
 }
 
+.rewrite {
+  flex-basis: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.rewrite p {
+  margin-top: 6px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .note {
   color: var(--muted);
   line-height: 1.45;

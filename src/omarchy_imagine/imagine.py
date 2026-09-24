@@ -30,6 +30,7 @@ from omarchy_imagine.config import (
     VIDEO_MODEL,
     XAI_API_BASE,
 )
+from omarchy_imagine.moderate import is_moderation_failure
 
 
 class ImagineError(Exception):
@@ -39,10 +40,12 @@ class ImagineError(Exception):
         *,
         request_sent: bool,
         request_id: str | None = None,
+        moderation: bool = False,
     ) -> None:
         super().__init__(message)
         self.request_sent = request_sent
         self.request_id = request_id
+        self.moderation = moderation
 
 
 def data_uri(image: bytes) -> str:
@@ -194,9 +197,11 @@ class ImagineClient:
                 request_sent=False,
             ) from exc
         if response.status_code >= 400:
+            text = _error_text(response)
             raise ImagineError(
-                f"Imagine {path} failed ({response.status_code}): {_error_text(response)}",
+                f"Imagine {path} failed ({response.status_code}): {text}",
                 request_sent=True,
+                moderation=is_moderation_failure(_json_or_none(response), text),
             )
         return response
 
@@ -209,6 +214,12 @@ class ImagineClient:
         if not isinstance(data, list) or not data or not isinstance(data[0], dict):
             raise ImagineError("Imagine image response did not include data[0]", request_sent=True)
         item = data[0]
+        if is_moderation_failure(payload):
+            raise ImagineError(
+                "Imagine image was filtered by moderation and returned no usable image",
+                request_sent=True,
+                moderation=True,
+            )
         encoded = item.get("b64_json")
         if isinstance(encoded, str) and encoded:
             try:
@@ -242,10 +253,12 @@ class ImagineClient:
                     request_id=request_id,
                 ) from exc
             if response.status_code >= 400:
+                text = _error_text(response)
                 raise ImagineError(
-                    f"Imagine video poll failed ({response.status_code}): {_error_text(response)}",
+                    f"Imagine video poll failed ({response.status_code}): {text}",
                     request_sent=True,
                     request_id=request_id,
+                    moderation=is_moderation_failure(_json_or_none(response), text),
                 )
             try:
                 payload = response.json()
@@ -279,6 +292,7 @@ class ImagineClient:
                         "Imagine video was filtered by moderation and returned no usable URL",
                         request_sent=True,
                         request_id=request_id,
+                        moderation=True,
                     )
                 media = video.get("url")
                 if not isinstance(media, str) or not media:
@@ -290,7 +304,12 @@ class ImagineClient:
                 return media
             if status in {"failed", "expired"}:
                 message = _video_failure_message(payload) or f"Imagine video {status}"
-                raise ImagineError(message, request_sent=True, request_id=request_id)
+                raise ImagineError(
+                    message,
+                    request_sent=True,
+                    request_id=request_id,
+                    moderation=is_moderation_failure(payload, message),
+                )
             raise ImagineError(
                 f"Imagine video returned unexpected status {status!r}",
                 request_sent=True,
@@ -329,6 +348,13 @@ class ImagineClient:
                 request_id=request_id,
             )
         return bytes(response.content)
+
+
+def _json_or_none(response: httpx.Response) -> object:
+    try:
+        return response.json()
+    except json.JSONDecodeError:
+        return None
 
 
 def _video_failure_message(payload: dict) -> str:

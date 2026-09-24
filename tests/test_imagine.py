@@ -176,7 +176,10 @@ def test_video_failure_and_moderation_do_not_invent_urls() -> None:
             },
         )
 
-    with _client(moderated) as client, pytest.raises(ImagineError, match="moderation"):
+    with (
+        _client(moderated) as client,
+        pytest.raises(ImagineError, match="moderation") as raised_mod,
+    ):
         client.image_to_video(
             prompt="move",
             image=PNG_BYTES,
@@ -184,6 +187,67 @@ def test_video_failure_and_moderation_do_not_invent_urls() -> None:
             aspect_ratio="16:9",
             resolution="720p",
         )
+    assert raised_mod.value.moderation is True
+    assert raised.value.moderation is False
+
+
+def test_video_poll_400_is_content_moderation() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json={"request_id": "req-mod"})
+        return httpx.Response(
+            400,
+            json={
+                "code": "Client specified an invalid argument",
+                "error": "Generated video rejected by content moderation.",
+            },
+        )
+
+    with (
+        _client(handler) as client,
+        pytest.raises(ImagineError, match="content moderation") as raised,
+    ):
+        client.image_to_video(
+            prompt="move",
+            image=PNG_BYTES,
+            duration_sec=4,
+            aspect_ratio="16:9",
+            resolution="720p",
+        )
+    assert raised.value.moderation is True
+    assert raised.value.request_sent is True
+    assert raised.value.request_id == "req-mod"
+    assert "https://" not in str(raised.value)
+
+
+def test_image_generation_400_and_respect_moderation_are_moderation() -> None:
+    def rejected(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            400,
+            json={"error": {"message": "Generated image rejected by content moderation."}},
+        )
+
+    with (
+        _client(rejected) as client,
+        pytest.raises(ImagineError, match="content moderation") as raised,
+    ):
+        client.generate_still("a clash", "16:9", "1k")
+    assert raised.value.moderation is True
+
+    def filtered(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={"data": [{"b64_json": None, "url": "", "respect_moderation": False}]},
+        )
+
+    with (
+        _client(filtered) as client,
+        pytest.raises(ImagineError, match="filtered by moderation") as edited,
+    ):
+        client.edit_still("keep the boat", PNG_BYTES, "16:9", "1k")
+    assert edited.value.moderation is True
 
 
 def test_video_poll_timeout() -> None:

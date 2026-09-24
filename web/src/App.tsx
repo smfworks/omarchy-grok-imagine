@@ -436,7 +436,7 @@ export function App() {
               })}
             </div>
             {latest.shots.map((shot) => (
-              <p className="shot-status" key={shot.id}>
+              <div className="shot-status" key={shot.id}>
                 <strong>{shot.id}</strong>
                 <span>still {shot.called_imagine_still ? "called" : "not called"}</span>
                 <span>file {shot.produced_still ? "yes" : "no"}</span>
@@ -446,7 +446,16 @@ export function App() {
                 {shot.still_path ? <code>{shot.still_path}</code> : null}
                 {shot.clip_path ? <code>{shot.clip_path}</code> : null}
                 {shot.error ? <span>{shot.error}</span> : null}
-              </p>
+                {shot.moderation && shot.moderation.retry_count > 0 ? (
+                  <div className="rewrite">
+                    <strong>Moderation retry {shot.moderation.retry_count}</strong>
+                    <p>Still was: {shot.moderation.original_prompt_still}</p>
+                    <p>Still sent: {shot.moderation.softened_prompt_still}</p>
+                    <p>Motion was: {shot.moderation.original_prompt_motion}</p>
+                    <p>Motion sent: {shot.moderation.softened_prompt_motion}</p>
+                  </div>
+                ) : null}
+              </div>
             ))}
             <div className="actions" style={{ marginTop: 12 }}>
               <button type="button" onClick={() => void onDownload()} disabled={!latest.stitched_episode}>

@@ -24,6 +24,14 @@ export type Health = {
   continuity: "last_frame_edit" | "prose_regenerate";
 };
 
+export type ModerationNote = {
+  retry_count: number;
+  original_prompt_still: string;
+  original_prompt_motion: string;
+  softened_prompt_still: string;
+  softened_prompt_motion: string;
+};
+
 export type ShotStatus = {
   id: string;
   called_imagine_still: boolean;
@@ -36,6 +44,7 @@ export type ShotStatus = {
   still_mode: string | null;
   video_request_id: string | null;
   error: string | null;
+  moderation: ModerationNote | null;
 };
 
 export type Job = {
