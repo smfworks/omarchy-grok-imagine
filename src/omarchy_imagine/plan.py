@@ -282,14 +282,18 @@ def _heuristic_pack(
     resolution: str,
 ) -> PackIn:
     prompt = soften_wording(body.prompt)
-    title = soften_wording(body.title) if body.title else _title_from_prompt(prompt)
-    if not title:
-        title = _title_from_prompt(prompt)
+    supplied = soften_wording(body.title) if body.title else ""
+    # Fill compares title to the logline with a raw string check. A title taken
+    # from the first sentence, or a logline that still has its period, would be
+    # copied into every still as a parenthetical. Strip that punctuation for the
+    # fill, then put the real title and the original prompt back on the draft.
+    basis = prompt.strip().rstrip(".!?").strip() or prompt
+    fill_title = supplied or basis
     try:
         filled = fill_pack(
             FillIn(
-                title=title,
-                logline=prompt,
+                title=fill_title,
+                logline=basis,
                 aspect_ratio=aspect,
                 resolution=resolution,
                 shot_count=len(durations),
@@ -298,6 +302,9 @@ def _heuristic_pack(
     except FillError as exc:
         raise PlanError(str(exc)) from exc
     draft = filled.model_dump()
+    draft["logline"] = prompt
+    if not supplied:
+        draft["title"] = _title_from_prompt(prompt)
     for shot, duration in zip(draft["shots"], durations, strict=True):
         shot["duration_sec"] = duration
     _soften_and_lock(draft)

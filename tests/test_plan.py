@@ -81,6 +81,9 @@ def test_heuristic_plan_builds_a_chain_without_http(monkeypatch: pytest.MonkeyPa
     )
     assert pack.title == "A fisher leaves the dock as the fog lifts"
     assert pack.logline == "A fisher leaves the dock as the fog lifts."
+    assert pack.shots[0].prompt_still.count("A fisher leaves the dock as the fog lifts") == 1
+    assert "(" not in pack.shots[0].prompt_still
+    assert ".," not in pack.shots[0].prompt_still
     assert pack.aspect_ratio == "9:16"
     assert pack.resolution == "1080p"
     assert [shot.duration_sec for shot in pack.shots] == [8, 8, 8, 8]
