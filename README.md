@@ -74,6 +74,29 @@ curl -s -X POST http://127.0.0.1:8010/api/packs/fill \
 
 The JSON that comes back is a valid `POST /api/packs` body.
 
+## Director brief
+
+Simple mode in the wizard is one story prompt, an overall length, and aspect and resolution. **Plan** asks `POST /api/packs/plan` for a full pack draft and loads it into the shot editor. **Run** then behaves as it does today: fill any field that is still blank, create the pack, and start the job. Planning is text only. It does not call Imagine, and the honesty gates stay false until a run actually does that work. Advanced mode keeps the full shot editor and **Fill blanks from logline**.
+
+`POST /api/packs/plan` accepts `{prompt, target_duration_sec, aspect_ratio?, resolution?, title?}`. The response is a pack draft valid for `POST /api/packs`: title, logline, aspect, resolution, and shots with `id`, `prompt_still`, `prompt_motion`, `duration_sec`, `start_state`, and `end_state`. It does not save the pack, call Imagine, or add media URLs. The same bearer token as the other pack routes is required.
+
+`target_duration_sec` is an integer from **8 to 120** seconds. Shorter or longer is HTTP 422, with the message that the target must be in that range. Two shots is the short end (a single clip is not a plan). Eight shots is the long end, so a plan stays within eight Imagine clips. `120` is eight clips at the 15-second maximum.
+
+Shot count is the nearest number of ~8 second clips. Halves round up (`20` seconds is three shots, not two). The count is then clamped to 2–8. Each clip is an integer from 1 to 15 seconds, as even as possible, and the durations sum to the target. From 12 through 80 seconds every clip lands in 6–10 seconds. An 8-second film is two 4-second clips, because two shots cannot both be 6 seconds and still add up to 8. A 100-second film is eight clips of 13 or 12 seconds, because eight clips is the cap.
+
+When `XAI_API_KEY` is set, the server sends the story to the text model `grok-4.6` with `POST /v1/chat/completions` and a strict JSON schema (`response_format.type` of `json_schema`). That is the structured-output shape in the current xAI docs, and Grok 4.6 accepts chat completions. The key stays in the server environment. The JSON is validated into the pack model. Durations, ids, aspect, and the start/end chain are applied by the server, not trusted from the model. Violent wording is softened with the same replacements as a moderation retry, so a planned pack is less likely to be rejected later. `XAI_TEXT_MODEL` can pin a different text model. The Imagine still and video models do not change.
+
+Without a key, planning uses the fill-blanks heuristic. Shot count and durations still come from the math above. Stills, motion, and the continuity chain are filled from the prompt. That path makes no network call, so CI can plan without a live API.
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/api/packs/plan \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"A fisher leaves the dock as the fog lifts.","target_duration_sec":24,"aspect_ratio":"16:9","resolution":"720p"}'
+```
+
+The JSON that comes back is a valid `POST /api/packs` body. Shot 2 `start_state` equals shot 1 `end_state`, and the durations sum to 24.
+
 ## Moderation retry
 
 Imagine can reject a still or a clip for content moderation. A live video poll does this as HTTP 400 with `Generated video rejected by content moderation.` A finished video can also come back with `respect_moderation: false` and no URL. Image generation and image edit use the same moderation wording on HTTP 400, and a 200 image body can set `respect_moderation` to false. The docs describe that image case as filtered by moderation.
@@ -204,7 +227,8 @@ Useful environment variables:
 
 | Variable | Default | Role |
 | --- | --- | --- |
-| `XAI_API_KEY` | unset | Live Imagine. Unset means stub. |
+| `XAI_API_KEY` | unset | Live Imagine, and the director-brief text model. Unset means stub runs and heuristic plans. |
+| `XAI_TEXT_MODEL` | `grok-4.6` | Chat model for `POST /api/packs/plan` when a key is set. |
 | `OMARCHY_DATA_DIR` | `./data` | SQLite file and `runs/` |
 | `XAI_API_BASE` | `https://api.x.ai/v1` | Override only for a compatible proxy |
 | `OMARCHY_VIDEO_POLL_SEC` | `5` | Video status poll interval |
@@ -214,12 +238,14 @@ Useful environment variables:
 
 ## Later
 
-Not in Phase 1:
+Not in this build:
 
 - Hermes Desktop pane
 - Cost estimator UI
 - Multi-episode seasons
 - Imagine video editing, extension, and reference-to-video APIs
+
+Director brief planning is included (`POST /api/packs/plan`, and Simple mode in the wizard). It writes a pack draft from one prompt and a target length. It does not estimate cost or plan a season.
 
 Also out of scope: ComfyUI, Qwen, MiniMax, and local GPU lanes.
 

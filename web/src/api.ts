@@ -63,6 +63,18 @@ export async function fillPack(pack: PackDraft): Promise<PackDraft> {
   return request("/api/packs/fill", { method: "POST", body: JSON.stringify(pack) });
 }
 
+export type PlanRequest = {
+  prompt: string;
+  target_duration_sec: number;
+  aspect_ratio?: string;
+  resolution?: string;
+  title?: string;
+};
+
+export async function planPack(body: PlanRequest): Promise<PackDraft> {
+  return request("/api/packs/plan", { method: "POST", body: JSON.stringify(body) });
+}
+
 export async function createPack(pack: PackDraft): Promise<{ id: string }> {
   return request("/api/packs", { method: "POST", body: JSON.stringify(pack) });
 }

@@ -60,6 +60,18 @@ def is_moderation_failure(payload: object, text: str = "") -> bool:
     return _respect_moderation_false(payload)
 
 
+def soften_wording(text: str) -> str:
+    """Replace violent wording. Does not append a moderation-retry note.
+
+    Planning uses this so a harbor story stays a harbor story, while a fight
+    or a death still becomes exhaustion and a choreographed clash.
+    """
+    body = text.strip()
+    for pattern, replacement in _REPLACEMENTS:
+        body = pattern.sub(replacement, body)
+    return re.sub(r"\s{2,}", " ", body).strip()
+
+
 def soften_prompts(still: str, motion: str, *, attempt: int) -> tuple[str, str]:
     """Return still and motion prompts with violent wording replaced.
 
@@ -72,10 +84,7 @@ def soften_prompts(still: str, motion: str, *, attempt: int) -> tuple[str, str]:
 
 
 def _soften_one(text: str, note: str) -> str:
-    body = _strip_note(text.strip())
-    for pattern, replacement in _REPLACEMENTS:
-        body = pattern.sub(replacement, body)
-    body = re.sub(r"\s{2,}", " ", body).strip()
+    body = soften_wording(_strip_note(text.strip()))
     if not body:
         return note
     if body[-1] not in ".!?":

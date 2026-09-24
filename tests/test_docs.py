@@ -34,6 +34,18 @@ def test_skill_documents_the_http_flow() -> None:
     assert "MIT" in (ROOT / "LICENSE").read_text(encoding="utf-8")
 
 
+def test_docs_cover_the_director_brief() -> None:
+    for relative in (
+        "README.md",
+        ".cursor/skills/omarchy-imagine/SKILL.md",
+        "docs/agent-skill.md",
+    ):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        assert "/api/packs/plan" in text
+        assert "target_duration_sec" in text
+        assert "8 to 120" in text
+
+
 def test_readme_and_desktop_document_fill_and_the_app_launcher() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     desktop = (ROOT / "packaging/omarchy-grok-imagine.desktop").read_text(encoding="utf-8")
