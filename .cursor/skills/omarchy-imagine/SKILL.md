@@ -160,6 +160,23 @@ curl -s -X POST http://127.0.0.1:8010/api/music \
 
 Wav, mp3, m4a, or ogg, max 20 MB. The response `music_path` can go on the pack. `POST /api/packs/{id}/music` stores a bed on an existing pack and remixes `episode.mp4` from `episode.base.mp4` when the latest job is already `done` and stitched. That remix does not call Imagine. `music_bed_applied` stays false until the mix writes a file.
 
+## 1b. Preflight before any run
+
+Call `POST /api/packs/preflight` before `POST /api/packs/{id}/run`. Send the same pack body you would save. The route does not persist a pack and does not construct an xAI client, even when `XAI_API_KEY` is set.
+
+```bash
+curl -s -X POST http://127.0.0.1:8010/api/packs/preflight \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d @pack.json
+```
+
+Read `shots[].still_prompt` and `shots[].motion_prompt`. Those are the strings the run will send, built by the same prompt builders as the pipeline. When ffmpeg is available, each shot after the first is seeded, and the still prompt adds `seed frame is the previous clip's last frame at run time`. `still_mode_expected` is `text_to_image`, `cast_reference`, or `last_frame_edit`. `totals` is still calls, video calls, and video seconds (for example `4 stills, 4 videos, 32 s of video`). There is no dollar price.
+
+If `blocking` is true, fix every `handoff_state` issue before you run. `verb_count`, `camera_conflict`, `banned_cut`, and `lock_drift` are warnings. `r2v_resolution` is a note that a `1080p` pack will send `reference_to_video` at `720p`. Warnings do not stop the run.
+
+Do not call the run route until you have read this response.
+
 ## 2. Run
 
 ```bash
@@ -318,6 +335,7 @@ Write `end_state` as prose that the next shot can repeat as `start_state`.
 ## What not to do
 
 - Do not call `api.x.ai` from the agent for this pipeline. The local server owns the adapter, polling, download, and gate updates.
+- Do not call `POST /api/packs/{id}/run` until `POST /api/packs/preflight` has been read for that pack.
 - Do not mark a gate true in any client. Read them from `/jobs`.
 - Do not invent `still.png`, `clip.mp4`, or `episode.mp4` URLs when the run is `stub` or a gate is false.
 - Do not send Comfy, Qwen, or other local-GPU instructions. This app does not use them.

@@ -10,6 +10,7 @@ import {
   fetchReferenceBlob,
   fillPack,
   planPack,
+  preflightPack,
   regenerateShot,
   runPack,
   uploadMusic,
@@ -36,6 +37,7 @@ import {
   type Job,
   type LookBible,
   type PackDraft,
+  type PreflightResult,
   type ShotDraft,
 } from "./types";
 
@@ -59,6 +61,12 @@ function emptyShot(id: string, startState = ""): ShotDraft {
 
 function tokenLabel(value: string): string {
   return value ? value.replaceAll("_", " ") : "not set";
+}
+
+function totalsLine(totals: PreflightResult["totals"]): string {
+  const stills = totals.stills === 1 ? "1 still" : `${totals.stills} stills`;
+  const videos = totals.videos === 1 ? "1 video" : `${totals.videos} videos`;
+  return `${stills}, ${videos}, ${totals.video_seconds} s of video`;
 }
 
 function nextShotId(shots: ShotDraft[]): string {
@@ -220,7 +228,9 @@ export function App() {
   const [packId, setPackId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [activity, setActivity] = useState<"plan" | "fill" | "run" | null>(null);
+  const [activity, setActivity] = useState<"plan" | "fill" | "run" | "review" | null>(null);
+  const [review, setReview] = useState<PreflightResult | null>(null);
+  const reviewRef = useRef<HTMLElement | null>(null);
   const busy = activity !== null;
   const [mode, setMode] = useState<Mode>("simple");
   const [planned, setPlanned] = useState(false);
@@ -228,6 +238,16 @@ export function App() {
   const [briefTitle, setBriefTitle] = useState("");
   const [briefStyle, setBriefStyle] = useState("");
   const [targetSec, setTargetSec] = useState(32);
+
+  useEffect(() => {
+    setReview(null);
+  }, [draft]);
+
+  useEffect(() => {
+    if (review) {
+      reviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [review]);
   const [castName, setCastName] = useState("");
   const [castRole, setCastRole] = useState("character");
   const [castMarkers, setCastMarkers] = useState("");
@@ -426,6 +446,26 @@ export function App() {
       await fillFromDescription(draft);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not fill blanks");
+    } finally {
+      setActivity(null);
+    }
+  }
+
+  async function onReview() {
+    setActivity("review");
+    setError(null);
+    const problem = validate(draft);
+    if (problem) {
+      setError(problem);
+      setReview(null);
+      setActivity(null);
+      return;
+    }
+    try {
+      setReview(await preflightPack(payload(draft)));
+    } catch (err: unknown) {
+      setReview(null);
+      setError(err instanceof Error ? err.message : "Could not review the pack");
     } finally {
       setActivity(null);
     }
@@ -721,7 +761,7 @@ export function App() {
         {mode === "simple" ? (
           <p className="note">
             {draft.shots.length} shots, {draft.shots.reduce((sum, shot) => sum + shot.duration_sec, 0)}{" "}
-            seconds. Edit anything, then Run. This draft has no media yet. Honesty gates stay false
+            seconds. Edit anything, then Review & run. This draft has no media yet. Honesty gates stay false
             until Imagine runs.
           </p>
         ) : null}
@@ -934,8 +974,8 @@ export function App() {
           When both are set, a shot&apos;s start state must match the previous shot&apos;s end state.
           Duration is 1–15 seconds. Default is 8.
           {mode === "advanced"
-            ? " Fill blanks writes empty still prompts, motion prompts, and a locked start/end chain from the title and logline. Text you already typed stays. Run does the same fill when any of those fields are still blank."
-            : " Run fills any field that is still blank, then creates the pack and starts the job."}
+            ? " Fill blanks writes empty still prompts, motion prompts, and a locked start/end chain from the title and logline. Text you already typed stays. Review & run shows the prompts and the call count. Confirm fills any field that is still blank, then creates the pack and starts the job."
+            : " Review & run shows the prompts and the call count. Confirm fills any field that is still blank, then creates the pack and starts the job."}
         </p>
         {draft.shots.map((shot, index) => (
           <article className="shot" key={`${shot.id}-${index}`}>
@@ -1123,11 +1163,67 @@ export function App() {
               </button>
             </>
           ) : null}
-          <button type="button" className="primary" onClick={() => void onRun()} disabled={busy || running}>
-            {activity === "run" ? "Sending…" : "Run"}
+          <button
+            type="button"
+            className="primary"
+            onClick={() => void onReview()}
+            disabled={busy || running}
+          >
+            {activity === "review" ? "Reviewing…" : "Review & run"}
           </button>
         </div>
       </section>
+      ) : null}
+
+      {showEditor && review ? (
+        <section className="panel" id="preflight-panel" ref={reviewRef}>
+          <h2>Review & run</h2>
+          <p className="totals">{totalsLine(review.totals)}</p>
+          <p className="note">
+            These are the prompts a run will send, and how many Imagine calls that takes. No Imagine
+            call has been made.
+          </p>
+          {review.shots.map((shot) => (
+            <article className="shot" key={shot.id}>
+              <div className="shot-head">
+                <strong>{shot.id}</strong>
+                <span>
+                  still {shot.still_mode_expected} · video {shot.video_mode}
+                </span>
+              </div>
+              {shot.issues.length === 0 ? <p className="note">No issues.</p> : null}
+              {shot.issues.map((issue, issueIndex) => (
+                <p className={`issue ${issue.severity}`} key={`${shot.id}-${issue.code}-${issueIndex}`}>
+                  <strong>{issue.severity}</strong> {issue.code}: {issue.message}
+                </p>
+              ))}
+              <details>
+                <summary>Still prompt</summary>
+                <pre className="prompt-block">{shot.still_prompt}</pre>
+              </details>
+              <details>
+                <summary>Motion prompt</summary>
+                <pre className="prompt-block">{shot.motion_prompt}</pre>
+              </details>
+            </article>
+          ))}
+          <div className="actions">
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void onRun()}
+              disabled={busy || running || review.blocking}
+            >
+              {activity === "run" ? "Sending…" : "Confirm run"}
+            </button>
+            <button type="button" onClick={() => setReview(null)} disabled={busy}>
+              Close
+            </button>
+          </div>
+          {review.blocking ? (
+            <p className="note">A blocking issue has to be fixed before this run.</p>
+          ) : null}
+        </section>
       ) : null}
 
       <section className="panel">

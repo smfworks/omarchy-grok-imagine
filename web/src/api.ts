@@ -1,4 +1,4 @@
-import type { CastRef, Health, Job, PackDraft } from "./types";
+import type { CastRef, Health, Job, PackDraft, PreflightResult } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8010";
 const TOKEN = import.meta.env.VITE_API_TOKEN || "local-dev-token";
@@ -76,6 +76,10 @@ export type PlanRequest = {
 
 export async function planPack(body: PlanRequest): Promise<PackDraft> {
   return request("/api/packs/plan", { method: "POST", body: JSON.stringify(body) });
+}
+
+export async function preflightPack(pack: PackDraft): Promise<PreflightResult> {
+  return request("/api/packs/preflight", { method: "POST", body: JSON.stringify(pack) });
 }
 
 export async function createPack(pack: PackDraft): Promise<{ id: string }> {

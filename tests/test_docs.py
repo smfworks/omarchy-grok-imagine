@@ -51,6 +51,19 @@ def test_docs_cover_director_craft() -> None:
         assert "action_duel" in text
 
 
+def test_docs_cover_preflight() -> None:
+    for relative in (
+        "README.md",
+        ".cursor/skills/omarchy-imagine/SKILL.md",
+        "docs/agent-skill.md",
+    ):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        assert "/api/packs/preflight" in text
+        assert "handoff_state" in text
+        assert "verb_count" in text
+        assert "before" in text.lower()
+
+
 def test_docs_cover_phase2() -> None:
     for relative in (
         "README.md",
