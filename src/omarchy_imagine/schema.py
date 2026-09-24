@@ -16,6 +16,51 @@ from omarchy_imagine.config import (
 
 _SHOT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
+BIBLE_HEADER = "Look bible (locked across every shot):"
+_BIBLE_LABELS = ("Cast", "Wardrobe", "Palette", "Lighting", "Camera")
+
+
+class LookBible(BaseModel):
+    """Pack-wide lock for identity, clothes, color, light, and camera.
+
+    Empty strings are allowed so a hand-written pack can omit the block.
+    Plan and fill always write all five lines.
+    """
+
+    cast: str = ""
+    wardrobe: str = ""
+    palette: str = ""
+    lighting: str = ""
+    camera: str = ""
+
+    @field_validator("cast", "wardrobe", "palette", "lighting", "camera")
+    @classmethod
+    def bible_text(cls, value: str) -> str:
+        return value.strip()
+
+    def prompt_block(self) -> str:
+        lines = [
+            f"{label}: {getattr(self, label.lower())}"
+            for label in _BIBLE_LABELS
+            if getattr(self, label.lower())
+        ]
+        if not lines:
+            return ""
+        return BIBLE_HEADER + "\n" + "\n".join(lines)
+
+
+def render_look_bible(value: object) -> str:
+    """Turn a stored bible (model, dict, or already-rendered block) into prompt text."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    try:
+        bible = value if isinstance(value, LookBible) else LookBible.model_validate(value)
+    except ValueError:
+        return ""
+    return bible.prompt_block()
+
 
 class Shot(BaseModel):
     id: str
@@ -61,6 +106,7 @@ class PackIn(BaseModel):
     logline: str = ""
     aspect_ratio: str = "16:9"
     resolution: str = "720p"
+    look_bible: LookBible = Field(default_factory=LookBible)
     shots: list[Shot] = Field(min_length=1)
 
     @field_validator("title")
@@ -148,6 +194,7 @@ class JobOut(BaseModel):
     message: str | None = None
     error: str | None = None
     continuity_mode: str | None = None
+    grade_match: bool = False
     called_imagine_still: bool
     produced_still: bool
     called_imagine_video: bool

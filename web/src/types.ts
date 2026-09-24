@@ -1,3 +1,19 @@
+export type LookBible = {
+  cast: string;
+  wardrobe: string;
+  palette: string;
+  lighting: string;
+  camera: string;
+};
+
+export const emptyLookBible = (): LookBible => ({
+  cast: "",
+  wardrobe: "",
+  palette: "",
+  lighting: "",
+  camera: "",
+});
+
 export type ShotDraft = {
   id: string;
   prompt_still: string;
@@ -12,6 +28,7 @@ export type PackDraft = {
   logline: string;
   aspect_ratio: string;
   resolution: string;
+  look_bible: LookBible;
   shots: ShotDraft[];
 };
 
@@ -54,6 +71,7 @@ export type Job = {
   message: string | null;
   error: string | null;
   continuity_mode: string | null;
+  grade_match: boolean;
   called_imagine_still: boolean;
   produced_still: boolean;
   called_imagine_video: boolean;

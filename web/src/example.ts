@@ -5,6 +5,13 @@ export const examplePack: PackDraft = {
   logline: "A fisher leaves the dock as the fog lifts.",
   aspect_ratio: "16:9",
   resolution: "720p",
+  look_bible: {
+    cast: "The same fisher, with the same face and the same body type, in every shot.",
+    wardrobe: "The same working coat, boots, and knit cap on the fisher, unchanged.",
+    palette: "Cool harbor gray, fog white, weathered wood brown, and muted dawn blue, held constant.",
+    lighting: "Soft dawn key, low contrast, fog diffusion, and no hard shadow change between shots.",
+    camera: "35mm film still, natural color, one grade, no flicker and no lens change between shots.",
+  },
   shots: [
     {
       id: "s01",

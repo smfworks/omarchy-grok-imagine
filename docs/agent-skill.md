@@ -24,7 +24,7 @@ curl -s -X POST http://127.0.0.1:8010/api/packs/fill \
   -d '{"title":"Harbor dawn","logline":"Fog lifts.","shot_count":2}'
 ```
 
-Director brief (`POST /api/packs/plan`) when you have one story prompt and a target length in seconds. The response is a full draft (title, logline, shots, durations, chained start/end states), not a saved pack. `target_duration_sec` must be from 8 to 120 or the route is `422`. Shot count is about one clip per 8 seconds, at least 2 and at most 8, and the durations sum to the target. With `XAI_API_KEY` set, a text model writes the prose. Without a key, the fill heuristic does, and no Imagine call is made. Post that JSON to `POST /api/packs` when you want to save it. Gates stay false until you run.
+Director brief (`POST /api/packs/plan`) when you have one story prompt and a target length in seconds. The response is a full draft (title, logline, `look_bible`, shots, durations, chained start/end states), not a saved pack. `target_duration_sec` must be from 8 to 120 or the route is `422`. Shot count is about one clip per 8 seconds, at least 2 and at most 8, and the durations sum to the target. With `XAI_API_KEY` set, a text model writes the prose, including the look bible. Without a key, the fill heuristic does, and no Imagine call is made. Post that JSON to `POST /api/packs` when you want to save it. Gates stay false until you run.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8010/api/packs/plan \
@@ -51,7 +51,13 @@ Read the gates on `jobs[0]`. They stay false until the work happened:
 - `produced_mp4`
 - `stitched_episode`
 
-Without `XAI_API_KEY`, status is `stub`, every gate is false, and the payload has no media URL.
+Without `XAI_API_KEY`, status is `stub`, every gate is false, `continuity_mode` is null, `grade_match` is false, and the payload has no media URL.
+
+## Continuity lock
+
+`look_bible` is `cast`, `wardrobe`, `palette`, `lighting`, and `camera`. Plan and fill always return it. The server puts that block on every still prompt and every image-to-video prompt. A seeded still (`still_mode: last_frame_edit`) must keep the source frame's face, body, clothes, and grade. Motion prompts say to continue from that exact still and only animate the described motion. A moderation rewrite softens the shot prose and keeps the bible.
+
+Before concat, ffmpeg can soft-match later clips toward clip 1 (`signalstats` + `eq`). `grade_match` is true only when that pass wrote a file. If the filters are missing, or `OMARCHY_GRADE_MATCH` is off, the job message says the pass was skipped and the episode still stitches. Read `continuity_mode`, each shot's `still_mode`, and `grade_match` from the job. Do not invent them.
 
 Download only when `stitched_episode` is true:
 

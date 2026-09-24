@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from omarchy_imagine.schema import PackIn
+from omarchy_imagine.schema import LookBible, PackIn
 
 
 class JobInProgress(Exception):
@@ -42,7 +42,12 @@ def blank_shot_record(shot_id: str) -> dict[str, Any]:
     }
 
 
-def aggregate_gates(shots: list[dict[str, Any]], *, stitched: bool) -> dict[str, bool]:
+def aggregate_gates(
+    shots: list[dict[str, Any]],
+    *,
+    stitched: bool,
+    grade_match: bool = False,
+) -> dict[str, bool]:
     """Job-level gates flip true once that work has happened for any shot.
 
     ``stitched_episode`` is the pack-level ffmpeg concat, not a per-shot flag.
@@ -58,6 +63,7 @@ def aggregate_gates(shots: list[dict[str, Any]], *, stitched: bool) -> dict[str,
         "called_imagine_video": any_flag("called_imagine_video"),
         "produced_mp4": any_flag("produced_mp4"),
         "stitched_episode": bool(stitched),
+        "grade_match": bool(grade_match),
     }
 
 
@@ -281,6 +287,7 @@ class Store:
             "message": job["message"],
             "error": job["error"],
             "continuity_mode": job["continuity_mode"],
+            "grade_match": bool(gates.get("grade_match", False)),
             "called_imagine_still": bool(gates["called_imagine_still"]),
             "produced_still": bool(gates["produced_still"]),
             "called_imagine_video": bool(gates["called_imagine_video"]),
@@ -309,12 +316,14 @@ class Store:
 
     @staticmethod
     def _public_pack(pack_id: str, body: dict[str, Any], created_at: str) -> dict[str, Any]:
+        bible = body.get("look_bible") or LookBible().model_dump()
         return {
             "id": pack_id,
             "title": body["title"],
             "logline": body.get("logline", ""),
             "aspect_ratio": body["aspect_ratio"],
             "resolution": body["resolution"],
+            "look_bible": bible,
             "shots": body["shots"],
             "created_at": created_at,
         }

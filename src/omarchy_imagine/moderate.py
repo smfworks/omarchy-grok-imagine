@@ -17,7 +17,11 @@ from __future__ import annotations
 
 import re
 
+from omarchy_imagine.schema import BIBLE_HEADER
+
 MAX_MODERATION_RETRIES = 2
+
+_BIBLE_LINE = re.compile(r"^(Cast|Wardrobe|Palette|Lighting|Camera):", re.IGNORECASE)
 
 _REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"violent bloody clash(?:es)?", re.IGNORECASE), "choreographed clash"),
@@ -78,9 +82,52 @@ def soften_prompts(still: str, motion: str, *, attempt: int) -> tuple[str, str]:
     ``attempt`` is 1-based. Each attempt appends a different staging note so a
     second retry is not the same string as the first. The note is not scanned
     for violent words, so "No blood" stays "No blood".
+
+    A look-bible block is lifted out before the rewrite and appended again
+    unchanged. Soften changes shot prose only.
     """
     note = _NOTES[min(max(attempt, 1), len(_NOTES)) - 1]
-    return _soften_one(still, note), _soften_one(motion, note)
+    still_prose, still_bible = split_look_bible(still)
+    motion_prose, motion_bible = split_look_bible(motion)
+    return (
+        join_look_bible(_soften_one(still_prose, note), still_bible),
+        join_look_bible(_soften_one(motion_prose, note), motion_bible),
+    )
+
+
+def split_look_bible(text: str) -> tuple[str, str]:
+    """Split ``text`` into shot prose and a verbatim look-bible block.
+
+    The bible is the header plus the Cast, Wardrobe, Palette, Lighting, and
+    Camera lines that follow it. Anything else stays in the prose.
+    """
+    if BIBLE_HEADER not in text:
+        return text.strip(), ""
+    before, _, after = text.partition(BIBLE_HEADER)
+    lines = after.splitlines()
+    index = 0
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    bible_lines = [BIBLE_HEADER]
+    while index < len(lines) and _BIBLE_LINE.match(lines[index].strip()):
+        bible_lines.append(lines[index].strip())
+        index += 1
+    if len(bible_lines) == 1:
+        return text.strip(), ""
+    rest = "\n".join(lines[index:]).strip()
+    prose = "\n\n".join(part for part in (before.strip(), rest) if part)
+    return prose, "\n".join(bible_lines)
+
+
+def join_look_bible(prose: str, bible: str) -> str:
+    """Put the look bible ahead of the shot prose."""
+    prose = prose.strip()
+    bible = bible.strip()
+    if not bible:
+        return prose
+    if not prose:
+        return bible
+    return f"{bible}\n\n{prose}"
 
 
 def _soften_one(text: str, note: str) -> str:

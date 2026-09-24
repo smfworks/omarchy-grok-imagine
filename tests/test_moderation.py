@@ -178,8 +178,12 @@ def test_video_poll_400_retries_without_redoing_the_previous_shot(
     assert "No blood" in note["softened_prompt_motion"]
     assert sum("wooden fishing boat" in prompt for prompt in image_prompts) == 1
     assert sum("fog thinning" in prompt for prompt in image_prompts) == 2
-    assert video_prompts.count("The boat eases away from the dock") == 1
-    assert sum(prompt == "A slow push in as the fog thins" for prompt in video_prompts) == 1
+    assert sum("The boat eases away from the dock" in prompt for prompt in video_prompts) == 1
+    assert sum(
+        "A slow push in as the fog thins" in prompt and "No blood" not in prompt
+        for prompt in video_prompts
+    ) == 1
+    assert all("Continue from this exact still" in prompt for prompt in video_prompts)
     assert job["shots"][0]["produced_mp4"] is True
     assert job["shots"][1]["produced_mp4"] is True
 

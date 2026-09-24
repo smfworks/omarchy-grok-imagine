@@ -45,13 +45,33 @@ Aspect ratios are the values both APIs document: `1:1`, `16:9`, `9:16`, `4:3`, `
 
 **Choice: `last_frame_edit` when ffmpeg is on `PATH`.**
 
-After each clip except the last, ffmpeg extracts the last frame (`ffmpeg -sseof -0.08 -i clip.mp4 -frames:v 1`). The next still is an Imagine image edit whose source image is that frame (a base64 data URI, which the edits API accepts). The edit prompt is the shot's `prompt_still` plus the locked start and end state. That new still is the first frame of the next image-to-video call.
+After each clip except the last, ffmpeg extracts the last frame (`ffmpeg -sseof -0.08 -i clip.mp4 -frames:v 1`). The next still is an Imagine image edit whose source image is that frame (a base64 data URI, which the edits API accepts). The edit prompt keeps the look bible, then tells the edit to keep the same face, the same body type, the same clothes, and the same color grade and lighting as that source frame. Only pose, blocking, and action may change, and only as far as the still prompt and the locked end state require. That new still is the first frame of the next image-to-video call.
 
 A last-frame seed keeps wardrobe, lighting, and blocking attached to a real pixel frame. Rewriting the next still from prose alone drifts. Image edit is the documented way to condition a still on a local image without hosting a public URL.
 
-**Fallback: `prose_regenerate` when ffmpeg is missing.** Every still is text-to-image, and the locked `start_state` / `end_state` lines are written into the prompt. `stitched_episode` stays false until ffmpeg concat actually writes `episode.mp4`.
+**Fallback: `prose_regenerate` when ffmpeg is missing.** Every still is text-to-image. The look bible and the locked `start_state` / `end_state` lines are written into the prompt. `stitched_episode` stays false until ffmpeg concat actually writes `episode.mp4`.
 
 When both are non-empty, shot N `start_state` must equal shot N-1 `end_state`.
+
+### Look bible
+
+A pack carries `look_bible`: `cast`, `wardrobe`, `palette`, `lighting`, and `camera`. Those five lines are the locked look for every shot. An empty bible is valid on a hand-written pack. `POST /api/packs/plan` and `POST /api/packs/fill` always write all five.
+
+The text model is asked for the bible in the same strict JSON schema as the shots. Blank lines fall back to the fill heuristic (same face and body, same clothes, a palette and key light taken from the story, 35mm natural color). The heuristic does not call xAI.
+
+At render time the server turns the bible into one block and puts it at the front of every still prompt and every image-to-video prompt. The motion prompt also says to continue from that exact still and not to change costume, hair, identity, or lighting. Only the described motion is animated.
+
+A moderation retry softens the shot prose only. If a look-bible block is already in the text, it is lifted out, left unchanged, and written back. The pack bible is applied again when the Imagine prompt is built, so a rewrite cannot drop it.
+
+The wizard shows the five lines under **Look bible**. Plan and Fill blanks load them into the draft. They are sent with the pack. They are not media URLs.
+
+### Grade match
+
+Before concat, the server soft-matches every clip after the first toward clip 1. It reads `signalstats` (YAVG, black and white points, saturation) and applies a gentle `eq` (brightness, contrast, saturation, gamma). That is a colorlevels-style nudge. It does not need `lut3d` or a generated LUT. Clip 1 is the reference and is not rewritten. Graded files are `clip.graded.mp4` next to the Imagine clip. The shot's `clip_path` stays the Imagine file.
+
+The pass is on unless `OMARCHY_GRADE_MATCH` is `0`, `false`, `no`, or `off`. If ffmpeg is missing `eq` or `signalstats`, or a measurement fails, the pass is skipped, the job message says why, and concat still runs. The episode does not fail because the grade did not run.
+
+`grade_match` on the job is true only when a graded file was written and used for concat. A stub job leaves it false. The job panel shows that flag, `continuity_mode` (`last_frame_edit` or `prose_regenerate`, or not set on a stub), and each shot's `still_mode` (`text_to_image` or `last_frame_edit`).
 
 ## Fill blanks
 
@@ -78,7 +98,7 @@ The JSON that comes back is a valid `POST /api/packs` body.
 
 Simple mode in the wizard is one story prompt, an overall length, and aspect and resolution. **Plan** asks `POST /api/packs/plan` for a full pack draft and loads it into the shot editor. **Run** then behaves as it does today: fill any field that is still blank, create the pack, and start the job. Planning is text only. It does not call Imagine, and the honesty gates stay false until a run actually does that work. Advanced mode keeps the full shot editor and **Fill blanks from logline**.
 
-`POST /api/packs/plan` accepts `{prompt, target_duration_sec, aspect_ratio?, resolution?, title?}`. The response is a pack draft valid for `POST /api/packs`: title, logline, aspect, resolution, and shots with `id`, `prompt_still`, `prompt_motion`, `duration_sec`, `start_state`, and `end_state`. It does not save the pack, call Imagine, or add media URLs. The same bearer token as the other pack routes is required.
+`POST /api/packs/plan` accepts `{prompt, target_duration_sec, aspect_ratio?, resolution?, title?}`. The response is a pack draft valid for `POST /api/packs`: title, logline, aspect, resolution, `look_bible`, and shots with `id`, `prompt_still`, `prompt_motion`, `duration_sec`, `start_state`, and `end_state`. It does not save the pack, call Imagine, or add media URLs. The same bearer token as the other pack routes is required.
 
 `target_duration_sec` is an integer from **8 to 120** seconds. Shorter or longer is HTTP 422, with the message that the target must be in that range. Two shots is the short end (a single clip is not a plan). Eight shots is the long end, so a plan stays within eight Imagine clips. `120` is eight clips at the 15-second maximum.
 

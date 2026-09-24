@@ -28,6 +28,10 @@ def test_skill_documents_the_http_flow() -> None:
     assert "5180" in readme
     assert "8010" in readme
     assert "last-frame" in readme.lower() or "last_frame_edit" in readme
+    assert "look_bible" in readme
+    assert "Grade match" in readme
+    assert "look_bible" in skill
+    assert "grade_match" in skill
     assert "https://console.x.ai" in readme
     assert "https://docs.x.ai/developers/model-capabilities/images/generation" in readme
     assert "https://docs.x.ai/developers/model-capabilities/video/image-to-video" in readme

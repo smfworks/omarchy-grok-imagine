@@ -7,6 +7,9 @@ direction built from that shot's still prompt. Blank start and end states
 describe the picture at the boundary, using the adjacent still prompts.
 When both sides of a continuity boundary are set, they must already match;
 this module will not overwrite either side to force a match.
+A look bible is always returned. Non-empty bible lines are kept. Empty lines
+are written from the title and logline: same face and body, same clothes,
+palette, key light, and a locked film look.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from omarchy_imagine.config import (
     MIN_DURATION_SEC,
     VIDEO_RESOLUTIONS,
 )
-from omarchy_imagine.schema import PackIn
+from omarchy_imagine.schema import LookBible, PackIn
 
 MAX_SHOTS = 12
 DEFAULT_SHOT_COUNT = 2
@@ -63,6 +66,7 @@ class FillIn(BaseModel):
     aspect_ratio: str | None = None
     resolution: str | None = None
     shot_count: int | None = None
+    look_bible: LookBible | None = None
     shots: list[ShotFill] | None = None
 
     @field_validator("title", "logline")
@@ -127,12 +131,86 @@ def fill_pack(body: FillIn) -> PackIn:
         "logline": logline,
         "aspect_ratio": body.aspect_ratio or "16:9",
         "resolution": body.resolution or "720p",
+        "look_bible": _look_bible(body, title, logline),
         "shots": shots,
     }
     try:
         return PackIn.model_validate(draft)
     except ValidationError as exc:
         raise FillError(_validation_message(exc)) from exc
+
+
+def build_look_bible(title: str, logline: str) -> LookBible:
+    """Deterministic cast, wardrobe, palette, light, and camera lock.
+
+    The lines name the same person and the same grade in every shot. They do
+    not quote the logline, so a violent brief is not copied into the bible.
+    """
+    low = (logline or title).lower()
+    subject = _cast_subject(low)
+    return LookBible(
+        cast=f"The same {subject}, with the same face and the same body type, in every shot.",
+        wardrobe=_wardrobe(low, subject),
+        palette=_palette(low),
+        lighting=_lighting(low),
+        camera=(
+            "35mm film still, natural color, one grade, "
+            "no flicker and no lens change between shots."
+        ),
+    )
+
+
+def _look_bible(body: FillIn, title: str, logline: str) -> dict[str, str]:
+    generated = build_look_bible(title, logline).model_dump()
+    supplied = body.look_bible.model_dump() if body.look_bible is not None else {}
+    for key, value in supplied.items():
+        if str(value).strip():
+            generated[key] = str(value).strip()
+    return generated
+
+
+def _cast_subject(low: str) -> str:
+    if "samurai" in low:
+        return "young samurai"
+    if "fisher" in low or "fisherman" in low:
+        return "fisher"
+    if "ninja" in low:
+        return "ninja"
+    return "lead figure"
+
+
+def _wardrobe(low: str, subject: str) -> str:
+    if "samurai" in low or "armor" in low:
+        return "The same armor and sword, unchanged, on the young samurai."
+    if "ninja" in low and "samurai" not in low:
+        return "The same black clothes, unchanged, on the ninja."
+    if any(word in low for word in ("fisher", "harbor", "dock", "boat", "fog")):
+        return "The same working coat, boots, and knit cap on the fisher, unchanged."
+    return f"The same clothes on the {subject}, unchanged from the first frame."
+
+
+def _palette(low: str) -> str:
+    if any(word in low for word in ("fog", "harbor", "dawn", "dock", "boat")):
+        return (
+            "Cool harbor gray, fog white, weathered wood brown, and muted dawn blue, held constant."
+        )
+    if any(word in low for word in ("autumn", "forest", "golden")):
+        return "Autumn gold, deep green, and warm amber, held constant."
+    if "night" in low:
+        return "Low-key blue-black with small warm practical lights, held constant."
+    return "The same muted natural palette in every shot, with no grade shift."
+
+
+def _lighting(low: str) -> str:
+    if any(word in low for word in ("dawn", "fog", "harbor")):
+        return (
+            "Soft dawn key, low contrast, fog diffusion, and no hard shadow change between shots."
+        )
+    if "golden" in low or "autumn" in low:
+        return "Warm side key, held at the same hour and the same contrast in every shot."
+    if "night" in low:
+        return "One soft practical key and deep shadows, held constant."
+    return "The same key-light direction and the same contrast in every shot."
 
 
 def _expand_shots(body: FillIn) -> list[ShotFill]:

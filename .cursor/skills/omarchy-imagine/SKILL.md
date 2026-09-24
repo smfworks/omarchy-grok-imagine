@@ -83,7 +83,7 @@ Save `id` as `PACK_ID`.
 
 ### Fill blanks
 
-`POST /api/packs/fill` turns a title and/or logline into a runnable draft. It does not save a pack, does not call Imagine, and does not add media URLs. `XAI_API_KEY` is not required. Non-empty `prompt_still`, `prompt_motion`, `start_state`, and `end_state` stay as written. Empty ones are filled so shot N `start_state` equals shot N-1 `end_state`. Aspect, resolution, and duration stay when you set them.
+`POST /api/packs/fill` turns a title and/or logline into a runnable draft. It does not save a pack, does not call Imagine, and does not add media URLs. `XAI_API_KEY` is not required. Non-empty `prompt_still`, `prompt_motion`, `start_state`, and `end_state` stay as written. Empty ones are filled so shot N `start_state` equals shot N-1 `end_state`. Aspect, resolution, and duration stay when you set them. The draft includes `look_bible` (`cast`, `wardrobe`, `palette`, `lighting`, `camera`). A line you already set is kept. Empty lines are written from the title and logline.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8010/api/packs/fill \
@@ -100,7 +100,7 @@ Send the response body to `POST /api/packs` to save it. A continuity mismatch th
 
 `target_duration_sec` is an integer from 8 to 120. Outside that range the route is `422`. Shot count is the nearest number of ~8 second clips, halves round up, then clamped to 2–8. Each clip is 1–15 seconds and the durations sum to the target. From 12 through 80 seconds every clip is 6–10 seconds.
 
-When `XAI_API_KEY` is set, prose comes from `grok-4.6` via `POST /v1/chat/completions` with a strict JSON schema. The server validates that JSON into the pack model, softens violent wording the same way a moderation retry does, and overwrites durations and the start/end chain. Without a key, the fill heuristic builds the same shot count, durations, and continuity chain and does not call the network. Either response is a valid `POST /api/packs` body.
+When `XAI_API_KEY` is set, prose comes from `grok-4.6` via `POST /v1/chat/completions` with a strict JSON schema. The server validates that JSON into the pack model, softens violent wording the same way a moderation retry does, and overwrites durations and the start/end chain. The schema also requires `look_bible`. Blank bible lines are filled from the same heuristic as `/api/packs/fill`. Without a key, the fill heuristic builds the same shot count, durations, continuity chain, and look bible, and does not call the network. Either response is a valid `POST /api/packs` body.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8010/api/packs/plan \
@@ -166,7 +166,9 @@ Each object in `shots` repeats the first four flags plus:
 - `video_request_id` — the xAI request id, not a media URL
 - `error` — shot-level failure text
 
-On a stub job every gate is false, `episode_path` is null, `continuity_mode` is null, and the JSON contains no `http://` or `https://` URL.
+On a stub job every gate is false, `episode_path` is null, `continuity_mode` is null, `grade_match` is false, and the JSON contains no `http://` or `https://` URL.
+
+`grade_match` is true only when ffmpeg wrote a graded clip and concat used it. A skip leaves it false and explains why in `message`. It is not one of the five Imagine gates.
 
 Example stub check (copy as one script after `PACK_ID` is set):
 
@@ -219,10 +221,13 @@ A later run deletes that pack directory before it starts. Historical gates remai
 
 ## Continuity the server applies
 
-You do not extract frames yourself.
+You do not extract frames yourself, and you do not grade the clips yourself.
 
-- ffmpeg present: shot 1 is text-to-image. Each later still is an image edit seeded by the previous clip's last frame (`last_frame_edit`).
-- ffmpeg absent: every still is text-to-image with the locked states in the prompt (`prose_regenerate`), and the episode is not stitched.
+- `look_bible` on the pack is injected into every still prompt and every image-to-video prompt. Plan and fill write it. A moderation retry softens shot prose and keeps the bible.
+- ffmpeg present: shot 1 is text-to-image (`still_mode: text_to_image`). Each later still is an image edit seeded by the previous clip's last frame (`still_mode: last_frame_edit`). The edit prompt keeps the same face, body type, clothes, and grade as that frame. Only pose, blocking, and action may change.
+- Every image-to-video prompt says to continue from that exact still and not to change costume, hair, identity, or lighting.
+- Before concat, ffmpeg may soft-match later clips toward clip 1 with `signalstats` and `eq`. If that filter set is missing, or `OMARCHY_GRADE_MATCH` is off, the job notes the skip and still stitches. `grade_match` is true only when the pass wrote a graded file.
+- ffmpeg absent: every still is text-to-image with the bible and the locked states in the prompt (`prose_regenerate`), and the episode is not stitched. `continuity_mode` on the job is `last_frame_edit` or `prose_regenerate`. A stub job leaves it null.
 
 Write `end_state` as prose that the next shot can repeat as `start_state`.
 

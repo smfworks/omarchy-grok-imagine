@@ -156,6 +156,7 @@ def test_aggregate_gates_stay_false_until_work_happens() -> None:
         "called_imagine_video": False,
         "produced_mp4": False,
         "stitched_episode": False,
+        "grade_match": False,
     }
     done = dict(blank)
     done["produced_still"] = True
