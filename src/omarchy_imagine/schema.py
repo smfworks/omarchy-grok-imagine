@@ -116,6 +116,16 @@ class PackOut(PackIn):
     created_at: str
 
 
+class ModerationNote(BaseModel):
+    """What a moderation retry changed on one shot. Gates are not part of this note."""
+
+    retry_count: int = 0
+    original_prompt_still: str = ""
+    original_prompt_motion: str = ""
+    softened_prompt_still: str = ""
+    softened_prompt_motion: str = ""
+
+
 class ShotStatus(BaseModel):
     id: str
     called_imagine_still: bool
@@ -128,6 +138,7 @@ class ShotStatus(BaseModel):
     still_mode: str | None = None
     video_request_id: str | None = None
     error: str | None = None
+    moderation: ModerationNote | None = None
 
 
 class JobOut(BaseModel):

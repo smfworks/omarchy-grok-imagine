@@ -40,6 +40,8 @@ def test_readme_and_desktop_document_fill_and_the_app_launcher() -> None:
     script = (ROOT / "scripts/omarchy-grok-imagine.sh").read_text(encoding="utf-8")
     assert "/api/packs/fill" in readme
     assert "Fill blanks" in readme
+    assert "Moderation retry" in readme
+    assert "Generated video rejected by content moderation" in readme
     assert "omarchy-grok-imagine.sh" in readme
     assert "StartupWMClass=OmarchyGrokImagine" in desktop
     assert "Exec=omarchy-grok-imagine" in desktop

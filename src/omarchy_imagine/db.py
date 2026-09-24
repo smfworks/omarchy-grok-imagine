@@ -38,6 +38,7 @@ def blank_shot_record(shot_id: str) -> dict[str, Any]:
         "still_mode": None,
         "video_request_id": None,
         "error": None,
+        "moderation": None,
     }
 
 

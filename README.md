@@ -59,7 +59,7 @@ A pack needs still and motion prompts before it can run. If you only have a titl
 
 `POST /api/packs/fill` accepts a partial pack, or just `{title, logline, shot_count?}`. It returns a pack draft. It does not save the pack, call Imagine, or add media URLs. The same bearer token as the other pack routes is required.
 
-The fill is a deterministic heuristic. It does not need `XAI_API_KEY`. Text you already typed is kept. Empty `prompt_still`, `prompt_motion`, `start_state`, and `end_state` values are written from the logline (or the title, when the logline is blank). Aspect, resolution, and `duration_sec` stay as you set them; omitted values stay at `16:9`, `720p`, and 8 seconds. Omitted `shot_count` with no shots creates two shots. A `shot_count` smaller than the shots you sent does not drop those shots.
+The fill is a deterministic heuristic. It does not need `XAI_API_KEY`. Text you already typed is kept. An empty still prompt becomes a visual line from the logline (or the title, when the logline is blank). An empty motion prompt is camera and action direction built from that shot's still prompt, such as a tracking shot alongside a running figure. Empty start and end states describe the picture at that boundary, using the adjacent still prompts, and they stay chained. Aspect, resolution, and `duration_sec` stay as you set them; omitted values stay at `16:9`, `720p`, and 8 seconds. Omitted `shot_count` with no shots creates two shots. A `shot_count` smaller than the shots you sent does not drop those shots.
 
 Continuity is a locked chain: shot N `start_state` equals shot N-1 `end_state`. If you already set one side of that boundary, the blank side copies it. If both sides are set and they differ, the route is `422` and neither side is rewritten.
 
@@ -73,6 +73,14 @@ curl -s -X POST http://127.0.0.1:8010/api/packs/fill \
 ```
 
 The JSON that comes back is a valid `POST /api/packs` body.
+
+## Moderation retry
+
+Imagine can reject a still or a clip for content moderation. A live video poll does this as HTTP 400 with `Generated video rejected by content moderation.` A finished video can also come back with `respect_moderation: false` and no URL. Image generation and image edit use the same moderation wording on HTTP 400, and a 200 image body can set `respect_moderation` to false. The docs describe that image case as filtered by moderation.
+
+When a shot hits one of those responses, the job rewrites that shot's still prompt and motion prompt and submits the shot again. The rewrite is deterministic and does not call a text model: gore and death become exhaustion and victory, and a fight becomes a choreographed clash with no blood. Each shot gets at most two rewrites. The next rejection fails the job. The error is stored, and the gates stay at whatever work actually happened. Shots that already produced a clip are not rendered again.
+
+The job panel shows the original prompt, the softened prompt, and the retry count for that shot. The saved pack keeps the text you typed.
 
 ## Honesty gates
 

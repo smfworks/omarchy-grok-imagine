@@ -36,6 +36,81 @@ def test_title_and_logline_fill_a_runnable_chain() -> None:
     assert len({shot.end_state for shot in pack.shots}) == 3
 
 
+_META_MARKERS = (
+    "Start locked to",
+    "End locked to",
+    "After beat",
+    "before anything moves",
+    "the story has advanced",
+    "the story has landed",
+    "One beat from the end",
+    "Begin the story",
+    "Locked start state",
+)
+
+
+def test_filled_motion_is_camera_direction_without_meta_text() -> None:
+    pack = fill_pack(
+        FillIn.model_validate(
+            {
+                "title": "Samurai vs Ninja",
+                "logline": "A young samurai is chased through an autumn forest.",
+                "shots": [
+                    {
+                        "id": "s01",
+                        "prompt_still": (
+                            "A young samurai in dark blue armor running from six "
+                            "black-clad ninja through a bright autumn forest"
+                        ),
+                    },
+                    {
+                        "id": "s04",
+                        "prompt_still": (
+                            "The exhausted young samurai standing alone in the autumn "
+                            "clearing at golden hour, armor scuffed and dusty, "
+                            "breathing hard, sword lowered"
+                        ),
+                    },
+                ],
+            }
+        )
+    )
+    opening, closing = pack.shots
+    assert opening.prompt_still.startswith("A young samurai")
+    assert opening.prompt_motion == (
+        "Tracking shot alongside the samurai as he sprints between trees, "
+        "leaves swirling in his wake, the ninja closing in behind him."
+    )
+    assert "Slow push in" in closing.prompt_motion
+    assert "breath" in closing.prompt_motion
+    assert "sword lowered" in closing.prompt_motion
+    assert closing.start_state == opening.end_state
+    assert opening.end_state == (
+        "The young samurai bursts out of the trees into a sunlit clearing, "
+        "the six ninja just behind him."
+    )
+    assert "clearing" in closing.end_state.lower()
+    assert "samurai" in opening.start_state.lower()
+    blob = json.dumps(pack.model_dump())
+    for marker in _META_MARKERS:
+        assert marker not in blob
+
+
+def test_generated_pack_has_no_meta_markers() -> None:
+    pack = fill_pack(
+        FillIn(
+            title="Harbor dawn",
+            logline="A fisher leaves the dock as the fog lifts.",
+            shot_count=3,
+        )
+    )
+    blob = json.dumps(pack.model_dump())
+    for marker in _META_MARKERS:
+        assert marker not in blob
+    assert "Wide tracking shot" in pack.shots[0].prompt_motion
+    assert pack.logline in pack.shots[0].prompt_motion
+
+
 def test_title_alone_defaults_to_two_shots() -> None:
     pack = fill_pack(FillIn(title="Night market"))
     assert pack.logline == ""
