@@ -6,12 +6,31 @@ export type LookBible = {
   camera: string;
 };
 
+export type CameraCard = {
+  scale: string;
+  angle: string;
+  move: string;
+  exit_frame: string;
+};
+
+export type StoryBeat = {
+  role: string;
+  summary: string;
+};
+
 export const emptyLookBible = (): LookBible => ({
   cast: "",
   wardrobe: "",
   palette: "",
   lighting: "",
   camera: "",
+});
+
+export const emptyCamera = (): CameraCard => ({
+  scale: "",
+  angle: "",
+  move: "",
+  exit_frame: "",
 });
 
 export type ShotDraft = {
@@ -21,6 +40,8 @@ export type ShotDraft = {
   duration_sec: number;
   end_state: string;
   start_state: string;
+  beat: string;
+  camera: CameraCard;
 };
 
 export type PackDraft = {
@@ -29,6 +50,8 @@ export type PackDraft = {
   aspect_ratio: string;
   resolution: string;
   look_bible: LookBible;
+  style_preset: string;
+  beat_map: StoryBeat[];
   shots: ShotDraft[];
 };
 
@@ -85,6 +108,20 @@ export type Job = {
 
 export const ASPECTS = ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"] as const;
 export const RESOLUTIONS = ["480p", "720p", "1080p"] as const;
+export const STYLE_PRESETS = ["generic", "action_duel", "quiet_drama", "trek"] as const;
+export const BEAT_ROLES = ["setup", "turn", "climax", "button"] as const;
+export const CAMERA_SCALES = ["wide", "medium", "close", "extreme_close"] as const;
+export const CAMERA_ANGLES = ["eye", "low", "high", "ots", "dutch"] as const;
+export const CAMERA_MOVES = [
+  "static",
+  "dolly_in",
+  "dolly_out",
+  "orbit",
+  "pan",
+  "tilt",
+  "whip_pan",
+  "handheld",
+] as const;
 
 export const GATES = [
   ["called_imagine_still", "Called Imagine still"],

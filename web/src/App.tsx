@@ -4,9 +4,16 @@ import { examplePack } from "./example";
 import { DURATION_PRESETS, MAX_PLAN_TARGET_SEC, MIN_PLAN_TARGET_SEC, planEstimate } from "./planMath";
 import {
   ASPECTS,
+  BEAT_ROLES,
+  CAMERA_ANGLES,
+  CAMERA_MOVES,
+  CAMERA_SCALES,
   GATES,
   RESOLUTIONS,
+  STYLE_PRESETS,
+  emptyCamera,
   emptyLookBible,
+  type CameraCard,
   type Health,
   type Job,
   type LookBible,
@@ -24,7 +31,13 @@ function emptyShot(id: string, startState = ""): ShotDraft {
     duration_sec: 8,
     end_state: "",
     start_state: startState,
+    beat: "",
+    camera: emptyCamera(),
   };
+}
+
+function tokenLabel(value: string): string {
+  return value ? value.replaceAll("_", " ") : "not set";
 }
 
 function nextShotId(shots: ShotDraft[]): string {
@@ -100,6 +113,10 @@ function payload(pack: PackDraft): PackDraft {
       lighting: pack.look_bible.lighting.trim(),
       camera: pack.look_bible.camera.trim(),
     },
+    style_preset: pack.style_preset.trim(),
+    beat_map: pack.beat_map
+      .map((beat) => ({ role: beat.role.trim(), summary: beat.summary.trim() }))
+      .filter((beat) => beat.role),
     shots: pack.shots.map((shot) => ({
       id: shot.id.trim(),
       prompt_still: shot.prompt_still.trim(),
@@ -107,6 +124,13 @@ function payload(pack: PackDraft): PackDraft {
       duration_sec: shot.duration_sec,
       end_state: shot.end_state.trim(),
       start_state: shot.start_state.trim(),
+      beat: shot.beat.trim(),
+      camera: {
+        scale: shot.camera.scale.trim(),
+        angle: shot.camera.angle.trim(),
+        move: shot.camera.move.trim(),
+        exit_frame: shot.camera.exit_frame.trim(),
+      },
     })),
   };
 }
@@ -118,6 +142,8 @@ export function App() {
     aspect_ratio: "16:9",
     resolution: "720p",
     look_bible: emptyLookBible(),
+    style_preset: "",
+    beat_map: [],
     shots: [emptyShot("s01")],
   });
   const [health, setHealth] = useState<Health | null>(null);
@@ -131,6 +157,7 @@ export function App() {
   const [planned, setPlanned] = useState(false);
   const [briefPrompt, setBriefPrompt] = useState("");
   const [briefTitle, setBriefTitle] = useState("");
+  const [briefStyle, setBriefStyle] = useState("");
   const [targetSec, setTargetSec] = useState(32);
 
   useEffect(() => {
@@ -189,6 +216,24 @@ export function App() {
     }));
   }
 
+  function updateCamera(index: number, patch: Partial<CameraCard>) {
+    setDraft((current) => ({
+      ...current,
+      shots: current.shots.map((shot, shotIndex) =>
+        shotIndex === index ? { ...shot, camera: { ...shot.camera, ...patch } } : shot,
+      ),
+    }));
+  }
+
+  function updateBeatSummary(index: number, summary: string) {
+    setDraft((current) => ({
+      ...current,
+      beat_map: current.beat_map.map((beat, beatIndex) =>
+        beatIndex === index ? { ...beat, summary } : beat,
+      ),
+    }));
+  }
+
   function updateShot(index: number, patch: Partial<ShotDraft>) {
     setDraft((current) => ({
       ...current,
@@ -229,7 +274,17 @@ export function App() {
   function adoptPack(pack: PackDraft): PackDraft {
     return {
       ...pack,
+      style_preset: pack.style_preset ?? "",
+      beat_map: (pack.beat_map ?? []).map((beat) => ({
+        role: beat.role ?? "",
+        summary: beat.summary ?? "",
+      })),
       look_bible: { ...emptyLookBible(), ...(pack.look_bible ?? {}) },
+      shots: pack.shots.map((shot) => ({
+        ...emptyShot(shot.id),
+        ...shot,
+        camera: { ...emptyCamera(), ...(shot.camera ?? {}) },
+      })),
     };
   }
 
@@ -266,6 +321,7 @@ export function App() {
         aspect_ratio: draft.aspect_ratio,
         resolution: draft.resolution,
         ...(title ? { title } : {}),
+        ...(briefStyle ? { style_preset: briefStyle } : {}),
       });
       setDraft(adoptPack(filled));
       setPlanned(true);
@@ -401,6 +457,17 @@ export function App() {
               onChange={(event) => setBriefTitle(event.target.value)}
               placeholder="Harbor dawn"
             />
+          </label>
+          <label className="field">
+            <span>Style (optional)</span>
+            <select value={briefStyle} onChange={(event) => setBriefStyle(event.target.value)}>
+              <option value="">Infer from the story</option>
+              {STYLE_PRESETS.map((preset) => (
+                <option key={preset} value={preset}>
+                  {tokenLabel(preset)}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="field">
             <span>Length (seconds)</span>
@@ -568,6 +635,44 @@ export function App() {
       </section>
       ) : null}
 
+      {showEditor && (draft.beat_map.length > 0 || draft.style_preset) ? (
+      <section className="panel">
+        <h2>Story beats</h2>
+        <p className="note">
+          Setup, turn, climax, and button. The camera card on each shot is the scale, the angle,
+          and one move. Exit frame is the picture the next shot should open on. Edit the cards
+          before Run. Planning does not create media, and honesty gates stay false until Imagine
+          runs.
+        </p>
+        <label className="field">
+          <span>Style preset</span>
+          <select
+            value={draft.style_preset}
+            onChange={(event) => setDraft({ ...draft, style_preset: event.target.value })}
+          >
+            <option value="">Not set</option>
+            {STYLE_PRESETS.map((preset) => (
+              <option key={preset} value={preset}>
+                {tokenLabel(preset)}
+              </option>
+            ))}
+          </select>
+        </label>
+        {draft.beat_map.map((beat, index) => (
+          <div className="beat-row" key={`${beat.role}-${index}`}>
+            <span className="chip">{tokenLabel(beat.role)}</span>
+            <label className="field">
+              <span className="sr-only">{tokenLabel(beat.role)} summary</span>
+              <textarea
+                value={beat.summary}
+                onChange={(event) => updateBeatSummary(index, event.target.value)}
+              />
+            </label>
+          </div>
+        ))}
+      </section>
+      ) : null}
+
       {showEditor ? (
       <section className="panel">
         <h2>Shots</h2>
@@ -597,6 +702,79 @@ export function App() {
                 </button>
               </div>
             </div>
+            <p className="craft-line">
+              <span className="chip">{tokenLabel(shot.beat)}</span>
+              <span className="chip">{tokenLabel(shot.camera.scale)}</span>
+              <span className="chip">{tokenLabel(shot.camera.angle)}</span>
+              <span className="chip">{tokenLabel(shot.camera.move)}</span>
+            </p>
+            <div className="grid">
+              <label className="field">
+                <span>Beat</span>
+                <select
+                  value={shot.beat}
+                  onChange={(event) => updateShot(index, { beat: event.target.value })}
+                >
+                  <option value="">Not set</option>
+                  {BEAT_ROLES.map((role) => (
+                    <option key={role} value={role}>
+                      {tokenLabel(role)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Scale</span>
+                <select
+                  value={shot.camera.scale}
+                  onChange={(event) => updateCamera(index, { scale: event.target.value })}
+                >
+                  <option value="">Not set</option>
+                  {CAMERA_SCALES.map((scale) => (
+                    <option key={scale} value={scale}>
+                      {tokenLabel(scale)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="grid">
+              <label className="field">
+                <span>Angle</span>
+                <select
+                  value={shot.camera.angle}
+                  onChange={(event) => updateCamera(index, { angle: event.target.value })}
+                >
+                  <option value="">Not set</option>
+                  {CAMERA_ANGLES.map((angle) => (
+                    <option key={angle} value={angle}>
+                      {tokenLabel(angle)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Move</span>
+                <select
+                  value={shot.camera.move}
+                  onChange={(event) => updateCamera(index, { move: event.target.value })}
+                >
+                  <option value="">Not set</option>
+                  {CAMERA_MOVES.map((move) => (
+                    <option key={move} value={move}>
+                      {tokenLabel(move)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="field">
+              <span>Exit frame</span>
+              <textarea
+                value={shot.camera.exit_frame}
+                onChange={(event) => updateCamera(index, { exit_frame: event.target.value })}
+              />
+            </label>
             <div className="grid">
               <label className="field">
                 <span>Id</span>

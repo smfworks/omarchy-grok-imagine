@@ -4,8 +4,8 @@ The draft is a ``PackIn``. Nothing is saved, and Imagine is not called.
 Shot count and per-shot durations are computed here. With ``XAI_API_KEY`` set,
 prose comes from the text model (chat completions, strict JSON schema) and is
 validated into the pack model. Without a key, the same math drives the
-fill-blanks heuristic. Either path softens violent wording before the draft
-is returned.
+fill-blanks heuristic. Either path writes a beat map and a camera card per
+shot, softens violent wording, and does not add media URLs.
 """
 
 from __future__ import annotations
@@ -33,9 +33,27 @@ from omarchy_imagine.config import (
     VIDEO_RESOLUTIONS,
     XAI_API_BASE,
 )
+from omarchy_imagine.craft import (
+    ShotGrammar,
+    apply_heuristic_craft,
+    beat_map_lines,
+    grammar_for,
+    infer_style,
+    lens_line,
+    lock_model_craft,
+)
 from omarchy_imagine.fill import FillError, FillIn, build_look_bible, fill_pack
 from omarchy_imagine.moderate import soften_wording
-from omarchy_imagine.schema import LookBible, PackIn
+from omarchy_imagine.schema import (
+    BEAT_ROLES,
+    CAMERA_ANGLES,
+    CAMERA_MOVES,
+    CAMERA_SCALES,
+    STYLE_PRESETS,
+    LookBible,
+    PackIn,
+    coerce_token,
+)
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
@@ -54,6 +72,7 @@ class PlanIn(BaseModel):
     aspect_ratio: str | None = None
     resolution: str | None = None
     title: str | None = None
+    style_preset: str | None = None
 
     @field_validator("prompt")
     @classmethod
@@ -107,6 +126,16 @@ class PlanIn(BaseModel):
             raise ValueError(f"resolution must be one of: {allowed}")
         return cleaned
 
+    @field_validator("style_preset")
+    @classmethod
+    def style_value(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        return coerce_token(cleaned, STYLE_PRESETS, {}, "style_preset", allow_empty=False)
+
 
 @dataclass(frozen=True)
 class PlanBrief:
@@ -115,14 +144,42 @@ class PlanBrief:
     aspect_ratio: str
     resolution: str
     durations: tuple[int, ...]
+    style_preset: str
+    grammar: tuple[ShotGrammar, ...]
+
+
+class StoryCamera(BaseModel):
+    """Loose camera card from the text model. The server replaces invalid enums."""
+
+    scale: str = ""
+    angle: str = ""
+    move: str = ""
+    exit_frame: str = ""
+
+    @field_validator("scale", "angle", "move", "exit_frame")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class StoryBeatDraft(BaseModel):
+    role: str = ""
+    summary: str = ""
+
+    @field_validator("role", "summary")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
 
 
 class StoryShot(BaseModel):
     prompt_still: str
     prompt_motion: str
     end_state: str
+    beat: str = ""
+    camera: StoryCamera = Field(default_factory=StoryCamera)
 
-    @field_validator("prompt_still", "prompt_motion", "end_state")
+    @field_validator("prompt_still", "prompt_motion", "end_state", "beat")
     @classmethod
     def strip_text(cls, value: str) -> str:
         return value.strip()
@@ -132,10 +189,12 @@ class StoryDraft(BaseModel):
     title: str = ""
     logline: str = ""
     opening_state: str = ""
+    style_preset: str = ""
+    beat_map: list[StoryBeatDraft] = Field(default_factory=list)
     look_bible: LookBible = Field(default_factory=LookBible)
     shots: list[StoryShot]
 
-    @field_validator("title", "logline", "opening_state")
+    @field_validator("title", "logline", "opening_state", "style_preset")
     @classmethod
     def strip_text(cls, value: str) -> str:
         return value.strip()
@@ -183,17 +242,21 @@ def plan_pack(body: PlanIn, planner: TextPlanner | None = None) -> PackIn:
     aspect = body.aspect_ratio or "16:9"
     resolution = body.resolution or "720p"
     durations = split_durations(body.target_duration_sec, shot_count_for(body.target_duration_sec))
+    style = body.style_preset or infer_style(body.prompt)
+    grammar = tuple(grammar_for(len(durations), style))
     if planner is None:
-        return _heuristic_pack(body, durations, aspect, resolution)
+        return _heuristic_pack(body, durations, aspect, resolution, style)
     brief = PlanBrief(
         prompt=body.prompt,
         title=body.title or "",
         aspect_ratio=aspect,
         resolution=resolution,
         durations=tuple(durations),
+        style_preset=style,
+        grammar=grammar,
     )
     story = planner.plan_story(brief)
-    return _pack_from_story(body, durations, story, aspect, resolution)
+    return _pack_from_story(body, durations, story, aspect, resolution, style)
 
 
 class XAITextPlanner:
@@ -281,6 +344,7 @@ def _heuristic_pack(
     durations: list[int],
     aspect: str,
     resolution: str,
+    style: str,
 ) -> PackIn:
     prompt = soften_wording(body.prompt)
     supplied = soften_wording(body.title) if body.title else ""
@@ -308,6 +372,7 @@ def _heuristic_pack(
         draft["title"] = _title_from_prompt(prompt)
     for shot, duration in zip(draft["shots"], durations, strict=True):
         shot["duration_sec"] = duration
+    apply_heuristic_craft(draft, style, prompt)
     _soften_and_lock(draft)
     return _validate_pack(draft)
 
@@ -318,6 +383,7 @@ def _pack_from_story(
     story: StoryDraft,
     aspect: str,
     resolution: str,
+    style: str,
 ) -> PackIn:
     expected = len(durations)
     if len(story.shots) != expected:
@@ -353,22 +419,44 @@ def _pack_from_story(
     shots[0]["start_state"] = opening
     for index in range(1, len(shots)):
         shots[index]["start_state"] = shots[index - 1]["end_state"]
-    bible = complete_look_bible(story.look_bible, title, logline)
+    bible = complete_look_bible(story.look_bible, title, logline, style)
+    model_beats = [
+        (item.role.lower().replace(" ", "_").replace("-", "_"), soften_wording(item.summary))
+        for item in story.beat_map
+    ]
+    model_exits = [soften_wording(item.camera.exit_frame) for item in story.shots]
+    beat_map = lock_model_craft(
+        shots,
+        style=style,
+        prompt=prompt,
+        model_beat_map=model_beats,
+        model_exits=model_exits,
+    )
+    for item in beat_map:
+        item["summary"] = soften_wording(item["summary"])
     return _validate_pack(
         {
             "title": title,
             "logline": logline,
             "aspect_ratio": aspect,
             "resolution": resolution,
+            "style_preset": style,
+            "beat_map": beat_map,
             "look_bible": bible.model_dump(),
             "shots": shots,
         }
     )
 
 
-def complete_look_bible(bible: LookBible, title: str, logline: str) -> LookBible:
+def complete_look_bible(
+    bible: LookBible,
+    title: str,
+    logline: str,
+    style: str = "generic",
+) -> LookBible:
     """Keep model lines that are set. Fill blanks from the heuristic, then soften."""
     fallback = build_look_bible(title, logline).model_dump()
+    fallback["camera"] = lens_line(style)
     merged: dict[str, str] = {}
     for key, value in bible.model_dump().items():
         chosen = str(value).strip() or str(fallback[key])
@@ -383,6 +471,11 @@ def _soften_and_lock(draft: dict[str, object]) -> None:
     if isinstance(bible, dict):
         for key in ("cast", "wardrobe", "palette", "lighting", "camera"):
             bible[key] = soften_wording(str(bible.get(key, "")))
+    beat_map = draft.get("beat_map")
+    if isinstance(beat_map, list):
+        for item in beat_map:
+            if isinstance(item, dict):
+                item["summary"] = soften_wording(str(item.get("summary", "")))
     shots = draft["shots"]
     if not isinstance(shots, list):
         return
@@ -391,6 +484,12 @@ def _soften_and_lock(draft: dict[str, object]) -> None:
         shot["prompt_motion"] = soften_wording(str(shot["prompt_motion"]))
         shot["start_state"] = soften_wording(str(shot["start_state"]))
         shot["end_state"] = soften_wording(str(shot["end_state"]))
+        camera = shot.get("camera")
+        if isinstance(camera, dict):
+            camera["exit_frame"] = soften_wording(str(camera.get("exit_frame", "")))
+            if camera["exit_frame"] != shot["end_state"] and shot["end_state"]:
+                # Heuristic packs set these equal. Keep them equal after softening.
+                camera["exit_frame"] = shot["end_state"]
     for index in range(1, len(shots)):
         shots[index]["start_state"] = shots[index - 1]["end_state"]
 
@@ -427,15 +526,39 @@ def _messages(brief: PlanBrief) -> list[dict[str, str]]:
         if brief.title
         else "Invent a short title from the story."
     )
+    card_lines = [
+        (
+            f"Shot {index} ({duration}s): beat={card.beat}, scale={card.scale}, "
+            f"angle={card.angle}, move={card.move}."
+        )
+        for index, (duration, card) in enumerate(
+            zip(brief.durations, brief.grammar, strict=True),
+            start=1,
+        )
+    ]
+    seen: list[str] = []
+    for card in brief.grammar:
+        if card.beat not in seen:
+            seen.append(card.beat)
+    beat_lines = [
+        f"- {role}: {summary}"
+        for role, summary in beat_map_lines(brief.prompt, seen, brief.style_preset)
+    ]
     user = "\n".join(
         [
             f"Story: {brief.prompt}",
             title_line,
+            f"Style preset: {brief.style_preset}",
             f"Shot count: {len(brief.durations)}",
             f"Clip durations in seconds, in order: {durations}",
             f"Aspect ratio: {brief.aspect_ratio}",
             f"Resolution: {brief.resolution}",
+            "Beat map:",
+            *beat_lines,
+            "Camera cards. Write each still and motion to match its card.",
+            *card_lines,
             "Write one continuous chain. The end of each shot is the start of the next.",
+            "Put the exit frame in camera.exit_frame and match it with end_state.",
         ]
     )
     return [
@@ -443,18 +566,27 @@ def _messages(brief: PlanBrief) -> list[dict[str, str]]:
             "role": "system",
             "content": (
                 "You plan a short film for Grok Imagine. Expand the story into "
-                "exactly the requested number of shots. prompt_still is one image: "
-                "subject, place, light, and wardrobe, with no camera move. "
-                "prompt_motion is how the camera and the subject move during that clip. "
-                "end_state is one sentence that describes the picture at the end of the clip. "
-                "opening_state is the picture at the start of the first shot. "
+                "exactly the requested number of shots. Follow the beat map and the "
+                "camera card for each shot. Do not change the shot count or the durations. "
+                "Story shape is setup, then turn, then climax, then button. Not equal filler. "
+                "Each shot has one want and one obstacle. Escalate or reverse the emotion. "
+                "The last shot is a readable button. "
+                "prompt_still is one locked frame: who, wardrobe, pose, space, and light. "
+                "No camera move in the still. "
+                "prompt_motion is only what changes, led by a verb, plus the one camera move "
+                "on the card. Do not write a mood essay. "
                 "look_bible locks the whole film: cast is the same face and body, "
                 "wardrobe is the same clothes, palette is the colors, lighting is the "
-                "key light, and camera is the film stock and lens. Every shot uses that "
-                "bible unchanged. "
+                "key light, and camera is the film stock and lens for the style preset. "
+                "Repeat those anchors lightly in each still and each motion line. "
+                "Use the scale, angle, and single move given for that shot. "
+                "Alternate scale across the pack. Use a Dutch angle only when the card says dutch. "
+                "exit_frame names the picture the next shot must open on, so a last-frame edit "
+                "can start clean. end_state matches that exit frame. "
+                "opening_state is the picture at the start of the first shot. "
                 "Keep the chain continuous. Write family-safe prose: no blood, gore, "
-                "death, or injury. A clash is a choreographed duel that ends in "
-                "exhaustion and victory. Do not include URLs or durations."
+                "death, or injury. A clash is bloodless choreography that ends in "
+                "exhaustion and victory. Do not include URLs."
             ),
         },
         {"role": "user", "content": user},
@@ -462,6 +594,17 @@ def _messages(brief: PlanBrief) -> list[dict[str, str]]:
 
 
 def _story_schema(shot_count: int) -> dict[str, object]:
+    camera = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "scale": {"type": "string", "enum": list(CAMERA_SCALES)},
+            "angle": {"type": "string", "enum": list(CAMERA_ANGLES)},
+            "move": {"type": "string", "enum": list(CAMERA_MOVES)},
+            "exit_frame": {"type": "string"},
+        },
+        "required": ["scale", "angle", "move", "exit_frame"],
+    }
     shot = {
         "type": "object",
         "additionalProperties": False,
@@ -469,8 +612,19 @@ def _story_schema(shot_count: int) -> dict[str, object]:
             "prompt_still": {"type": "string"},
             "prompt_motion": {"type": "string"},
             "end_state": {"type": "string"},
+            "beat": {"type": "string", "enum": list(BEAT_ROLES)},
+            "camera": camera,
         },
-        "required": ["prompt_still", "prompt_motion", "end_state"],
+        "required": ["prompt_still", "prompt_motion", "end_state", "beat", "camera"],
+    }
+    beat = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "role": {"type": "string", "enum": list(BEAT_ROLES)},
+            "summary": {"type": "string"},
+        },
+        "required": ["role", "summary"],
     }
     bible = {
         "type": "object",
@@ -491,6 +645,13 @@ def _story_schema(shot_count: int) -> dict[str, object]:
             "title": {"type": "string"},
             "logline": {"type": "string"},
             "opening_state": {"type": "string"},
+            "style_preset": {"type": "string", "enum": list(STYLE_PRESETS)},
+            "beat_map": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": beat,
+            },
             "look_bible": bible,
             "shots": {
                 "type": "array",
@@ -499,7 +660,15 @@ def _story_schema(shot_count: int) -> dict[str, object]:
                 "items": shot,
             },
         },
-        "required": ["title", "logline", "opening_state", "look_bible", "shots"],
+        "required": [
+            "title",
+            "logline",
+            "opening_state",
+            "style_preset",
+            "beat_map",
+            "look_bible",
+            "shots",
+        ],
     }
 
 

@@ -100,7 +100,24 @@ Send the response body to `POST /api/packs` to save it. A continuity mismatch th
 
 `target_duration_sec` is an integer from 8 to 120. Outside that range the route is `422`. Shot count is the nearest number of ~8 second clips, halves round up, then clamped to 2–8. Each clip is 1–15 seconds and the durations sum to the target. From 12 through 80 seconds every clip is 6–10 seconds.
 
-When `XAI_API_KEY` is set, prose comes from `grok-4.6` via `POST /v1/chat/completions` with a strict JSON schema. The server validates that JSON into the pack model, softens violent wording the same way a moderation retry does, and overwrites durations and the start/end chain. The schema also requires `look_bible`. Blank bible lines are filled from the same heuristic as `/api/packs/fill`. Without a key, the fill heuristic builds the same shot count, durations, continuity chain, and look bible, and does not call the network. Either response is a valid `POST /api/packs` body.
+When `XAI_API_KEY` is set, prose comes from `grok-4.6` via `POST /v1/chat/completions` with a strict JSON schema. The server validates that JSON into the pack model, softens violent wording the same way a moderation retry does, and overwrites durations and the start/end chain. The schema also requires `look_bible`, `style_preset`, `beat_map`, and a camera card on every shot. Blank bible lines are filled from the same heuristic as `/api/packs/fill`. Without a key, the fill heuristic builds the same shot count, durations, continuity chain, and look bible, and the server still writes the beat map and camera cards. That path does not call the network. Either response is a valid `POST /api/packs` body.
+
+### Director craft
+
+Plan adds story structure and camera grammar. A hand-written pack may omit them: empty `style_preset`, an empty `beat_map`, an empty shot `beat`, and an empty shot `camera` are valid. `POST /api/packs/fill` keeps craft fields you already set and does not invent a beat map.
+
+`style_preset` is `generic`, `action_duel`, `quiet_drama`, or `trek`. Send it on the plan request to force one. Omit it and the server infers one from the prompt, or uses `generic`.
+
+`beat_map` is `{role, summary}` lines in story order. Roles are `setup`, `turn`, `climax`, and `button`. The map is not equal filler. Two shots are setup then button. Three are setup, climax, button. Longer plans keep one setup and one button and split the middle between turn and climax.
+
+Each shot adds `beat` and `camera`:
+
+- `scale`: `wide`, `medium`, `close`, or `extreme_close`. Scales alternate. A four-shot generic plan is wide, medium, close, wide.
+- `angle`: `eye`, `low`, `high`, `ots`, or `dutch`. Dutch is used at most once, and only on an action-duel climax.
+- `move`: one of `static`, `dolly_in`, `dolly_out`, `orbit`, `pan`, `tilt`, `whip_pan`, `handheld`. One move per shot.
+- `exit_frame`: the picture the next shot opens on. `end_state` matches it on a heuristic plan, and the next `start_state` copies that line, so a last-frame edit starts clean.
+
+`prompt_still` stays a locked frame (who, wardrobe, pose, space, light) with no camera move. `prompt_motion` is only what changes, verb-led, plus that one move. Look-bible anchors are repeated lightly in both. `look_bible.camera` stays the lens and grade. The shot card is the grammar. Violent wording is softened at plan time. Durations still come from the ~8 second shot math. A later beat is shorter only when that split already makes it shorter. The draft has no media URLs.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8010/api/packs/plan \
