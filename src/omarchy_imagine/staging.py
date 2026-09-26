@@ -79,6 +79,45 @@ _CONTACT = re.compile(
     re.IGNORECASE,
 )
 _VAGUE = re.compile(r"\b(?:near|next to|alongside|beside)\b", re.IGNORECASE)
+_FALL_BACK = re.compile(
+    r"\b(?:(?:have|has|had|having|been)\s+)?(?:fall|falls|falling|fell|fallen)\s+back\b",
+    re.IGNORECASE,
+)
+# The story itself asked pursuers to stop or come off the horse. "Fall back"
+# in a generated line is still rewritten unless one of these is in the brief,
+# because the still model reads that phrase as bodies on the ground.
+_STORY_ALLOWS_STOP = re.compile(
+    r"\b(?:falls?\s+back|fallen\s+back|falling\s+back|dismounts?|unhorsed|"
+    r"tumbles?|lying on the ground|halts?|stopped|stand(?:s|ing)? still|"
+    r"shot off|knocked off)\b",
+    re.IGNORECASE,
+)
+_MOUNT_WORD = re.compile(
+    r"\b(?:horses?|mounts?|steeds?|mares?|stallions?|geldings?|ponies|mustangs?)\b",
+    re.IGNORECASE,
+)
+_ASTRIDE = re.compile(r"\b(?:on|riding|rides|astride|atop)\b", re.IGNORECASE)
+_HORSE_PARTY = re.compile(
+    r"\b(?:horses?|saddles?|riders?|mounts?|gallops?|galloping)\b",
+    re.IGNORECASE,
+)
+_SENTENCE_START = re.compile(r"(^|(?<=\.\s))([a-z])")
+_AFTER_PERIOD = re.compile(r"(?<=\.\s)([a-z])")
+_NAME_STOP = frozenset(
+    {
+        "the",
+        "his",
+        "her",
+        "their",
+        "and",
+        "with",
+        "horse",
+        "horses",
+        "mount",
+        "rider",
+        "riders",
+    }
+)
 _PURSUIT = (
     "chase",
     "pursuit",
@@ -124,23 +163,42 @@ def staging_clause(pack: PackIn | dict[str, Any], shot: Any, phase: str) -> str:
         return ""
     scene = _scene_for(parsed.staging, stage, shot_model.id)
     entities = {item.id: item for item in (scene.entities if scene else [])}
-    relations = stage.relations or (scene.relations if scene else [])
+    raw_relations = list(stage.relations or (scene.relations if scene else []))
+    mount_ids = _self_mount_ids(raw_relations, entities)
+    rider_ids = _self_mount_riders(raw_relations, entities)
+    relations = [item for item in raw_relations if not _is_self_mount_relation(item, entities)]
     travel = _scene_travel(scene, blocks)
     lines = [STAGING_HEADER, _header_sentence(scene, stage, travel)]
+    rendered_twist = False
     for block in blocks:
+        if block.id in mount_ids and rider_ids and any(item.id in rider_ids for item in blocks):
+            continue
         if not block.visible and phase != "motion":
             label = _label(entities, block.id)
             lines.append(f"- {label}: not in frame.")
             continue
-        lines.append(_block_line(block, entities, relations, travel, parsed.style_preset))
+        line = _block_line(block, entities, relations, travel, parsed.style_preset)
+        if "twists at the waist in the saddle" in line:
+            rendered_twist = True
+        lines.append(line)
+    # The still is the picture the image model paints. If the look-back lands
+    # on stage.end, the start blocks alone would only say "looks toward".
+    if phase != "motion" and not rendered_twist:
+        extra = _lookback_sentence(stage.end, entities, parsed.style_preset)
+        if extra:
+            lines.append(extra)
     if phase == "motion":
-        change = _change_line(stage.start, stage.end, entities)
+        change = _change_line(stage.start, stage.end, entities, parsed.style_preset)
         if change:
             lines.append(change)
+        if not rendered_twist:
+            extra = _lookback_sentence(blocks, entities, parsed.style_preset)
+            if extra and extra not in lines:
+                lines.append(extra)
     locks = _negative_locks(relations, entities, travel)
     if locks:
         lines.append(locks)
-    return "\n".join(lines)
+    return _polish_clause("\n".join(lines))
 
 
 def apply_staging(
@@ -187,10 +245,15 @@ def apply_staging(
         draft["staging"] = None
         return
     _attach_shot_ids(staging, shots)
+    _strip_scene_mounts(staging)
     draft["staging"] = staging.model_dump()
     _fill_shot_stages(shots, staging, style=style, prompt=prompt)
+    _strip_shot_mounts(shots, staging)
+    _keep_pursuers_riding(shots, staging, prompt)
     _copy_handoff(shots)
     _guard_cameras(shots, staging)
+    _normalize_draft_prose(draft, staging, prompt)
+    _ensure_lookback_motion(shots, staging, style)
 
 
 def check_staging(
@@ -352,7 +415,7 @@ def _header_sentence(scene: Any, stage: ShotStage, travel: str) -> str:
         parts.append("Camera stays on the same side of the line.")
     if scene is not None and scene.axis:
         parts.append(scene.axis.rstrip(".") + ".")
-    return " ".join(parts)
+    return _capitalize_sentences(" ".join(parts))
 
 
 def _label(entities: dict[str, Any], entity_id: str) -> str:
@@ -373,10 +436,16 @@ def _block_line(
     relation = _relation_phrase(block.id, relations, entities)
     gap = _gap_for(block.id, relations)
     riding = style == "chase" and block.travel in {"screen_left", "screen_right"}
-    motion = _motion_phrase(block.travel, riding=riding)
     look = ""
-    if block.look and block.look not in {block.facing, block.travel}:
-        look = f", looks toward {_LOOK_PHRASE.get(block.look, block.look)}"
+    profile = _pursuer_profile(block, entities, relations, style)
+    if _looks_back(block.look, block.travel) and _is_mounted_rider(block, entities, style):
+        motion = _twist_sentence(block.look, block.travel)
+    elif profile:
+        motion = profile
+    else:
+        motion = _motion_phrase(block.travel, riding=riding)
+        if block.look and block.look not in {block.facing, block.travel}:
+            look = f", looks toward {_LOOK_PHRASE.get(block.look, block.look)}"
     gap_bit = f", {gap}" if gap else ""
     rel_bit = f", {relation}" if relation else ""
     hidden = "" if block.visible else ", not in frame"
@@ -418,7 +487,12 @@ def _motion_phrase(travel: str, *, riding: bool) -> str:
     return "holding still"
 
 
-def _change_line(start: list[Any], end: list[Any], entities: dict[str, Any]) -> str:
+def _change_line(
+    start: list[Any],
+    end: list[Any],
+    entities: dict[str, Any],
+    style: str,
+) -> str:
     before = {block.id: block for block in start}
     bits: list[str] = []
     for block in end:
@@ -428,18 +502,31 @@ def _change_line(start: list[Any], end: list[Any], entities: dict[str, Any]) -> 
         label = _label(entities, block.id)
         if prior.depth != block.depth:
             bits.append(
-                f"{label} moves from {_DEPTH_PHRASE.get(prior.depth, prior.depth)} "
-                f"to {_DEPTH_PHRASE.get(block.depth, block.depth)}"
+                _capitalize_sentences(
+                    f"{label} moves from {_DEPTH_PHRASE.get(prior.depth, prior.depth)} "
+                    f"to {_DEPTH_PHRASE.get(block.depth, block.depth)}"
+                )
             )
         elif prior.x != block.x:
             bits.append(
-                f"{label} moves from {_X_PHRASE.get(prior.x, prior.x)} "
-                f"to {_X_PHRASE.get(block.x, block.x)}"
+                _capitalize_sentences(
+                    f"{label} moves from {_X_PHRASE.get(prior.x, prior.x)} "
+                    f"to {_X_PHRASE.get(block.x, block.x)}"
+                )
             )
-        if prior.look != block.look and block.look:
-            bits.append(f"{label} looks toward {_LOOK_PHRASE.get(block.look, block.look)}")
+        looking_back = _looks_back(block.look, block.travel) and _is_mounted_rider(
+            block, entities, style
+        )
+        if prior.look != block.look and block.look and not looking_back:
+            bits.append(
+                _capitalize_sentences(
+                    f"{label} looks toward {_LOOK_PHRASE.get(block.look, block.look)}"
+                )
+            )
         if prior.travel != block.travel:
-            bits.append(f"{label} travel becomes {block.travel.replace('_', ' ')}")
+            bits.append(
+                _capitalize_sentences(f"{label} travel becomes {block.travel.replace('_', ' ')}")
+            )
     if not bits:
         return ""
     return "Change: " + "; ".join(bits) + "."
@@ -454,7 +541,11 @@ def _negative_locks(relations: list[Any], entities: dict[str, Any], travel: str)
         pursuers = _label(entities, item.a)
         ban = _banned_side(travel)
         sentences.append(f"Nobody rides beside {pursued}.")
-        sentences.append(f"{pursuers} never pass {pursued} and never appear on {ban}.")
+        sentences.append(
+            _capitalize_sentences(
+                f"{pursuers} never pass {pursued} and never appear on {ban}."
+            )
+        )
     seen: list[str] = []
     for sentence in sentences:
         if sentence not in seen:
@@ -622,9 +713,67 @@ def _party_labels(prompt: str) -> tuple[str, str]:
 
 
 def _attach_shot_ids(staging: StagingMap, shots: list[Any]) -> None:
-    ids = [str(shot.get("id")) for shot in shots if isinstance(shot, dict) and shot.get("id")]
-    if len(staging.scenes) == 1 and not staging.scenes[0].shot_ids:
-        staging.scenes[0].shot_ids = ids
+    """Map scene shot_ids onto the pack's real ids when the model used another set.
+
+    A text model often returns ``"1"``–``"4"`` while the pack shots are ``s01``–``s04``.
+    Ids that already match are left alone. Otherwise shots that name the scene via
+    ``stage.scene_id`` win, then a single scene takes every shot, then leftover
+    scenes are filled in order by how many ids they listed.
+    """
+    real = [str(shot.get("id")) for shot in shots if isinstance(shot, dict) and shot.get("id")]
+    if not real or not staging.scenes:
+        return
+    real_set = set(real)
+
+    def linked(scene_id: str) -> list[str]:
+        found: list[str] = []
+        for shot in shots:
+            if not isinstance(shot, dict):
+                continue
+            stage = shot.get("stage")
+            sid = str(shot.get("id") or "")
+            if not sid or not isinstance(stage, dict):
+                continue
+            if str(stage.get("scene_id") or "") == scene_id:
+                found.append(sid)
+        return found
+
+    pending: list[Any] = []
+    claimed: list[str] = []
+    for scene in staging.scenes:
+        current = [item for item in scene.shot_ids if item in real_set]
+        if scene.shot_ids and len(current) == len(scene.shot_ids):
+            claimed.extend(scene.shot_ids)
+            continue
+        by_scene = linked(scene.id)
+        if by_scene:
+            scene.shot_ids = by_scene
+            claimed.extend(by_scene)
+            continue
+        pending.append(scene)
+    if not pending:
+        return
+    if len(staging.scenes) == 1:
+        staging.scenes[0].shot_ids = list(real)
+        return
+    if not claimed:
+        cursor = 0
+        for scene in staging.scenes:
+            count = len(scene.shot_ids)
+            if count <= 0:
+                continue
+            scene.shot_ids = real[cursor : cursor + count]
+            cursor += count
+        return
+    remaining = [sid for sid in real if sid not in set(claimed)]
+    cursor = 0
+    for scene in pending:
+        count = len(scene.shot_ids)
+        if count <= 0:
+            scene.shot_ids = []
+            continue
+        scene.shot_ids = remaining[cursor : cursor + count]
+        cursor += count
 
 
 def _fill_shot_stages(
@@ -695,14 +844,15 @@ def _chase_stages(scene: Any, beats: list[str]) -> list[dict[str, Any]]:
     ends: list[list[dict[str, Any]]] = []
     for beat in beats:
         if beat == "button":
+            # The final frame keeps the pursuers mounted and riding. Stopping
+            # them, or writing that they "fall back", reads as bodies on the ground.
             ends.append(
                 _layout_blocks(
                     scene,
                     pursued_x="right_edge",
                     pursued_depth="background",
-                    pursuer_x="left_third",
-                    pursuer_depth="mid",
-                    pursuer_travel="static",
+                    pursuer_x="left_edge",
+                    pursuer_depth="far",
                 )
             )
         elif beat == "climax":
@@ -1052,6 +1202,410 @@ def _is_behind(trailer: Any, lead: Any, travel: str) -> bool:
     if travel == "away_from_camera":
         return td < ld
     return td > ld
+
+
+def normalize_pursuer_fall_back(
+    text: str,
+    pursuers: list[str],
+    leads: list[str],
+    *,
+    story: str = "",
+) -> str:
+    """Rewrite pursuer 'fall back' / 'fallen back' so the still model keeps them riding.
+
+    The phrase is replaced only when the nearer party in that sentence is a
+    pursuer. The lead can still fall back. When ``story`` itself says the
+    pursuers stop or come off the horse, the line is left alone.
+    """
+    if not text or not pursuers or not _FALL_BACK.search(text):
+        return text
+    if story and _STORY_ALLOWS_STOP.search(story):
+        return text
+    parts = re.split(r"([.!?])", text)
+    out: list[str] = []
+    index = 0
+    while index < len(parts):
+        chunk = parts[index]
+        punct = parts[index + 1] if index + 1 < len(parts) else ""
+        index += 2 if punct else 1
+        out.append(_rewrite_fall_back_sentence(chunk, pursuers, leads) + punct)
+    return "".join(out)
+
+
+def _rewrite_fall_back_sentence(sentence: str, pursuers: list[str], leads: list[str]) -> str:
+    def replacer(match: re.Match[str]) -> str:
+        before = sentence[: match.start()]
+        if _nearer_party(before, pursuers, leads) == "pursuer":
+            return "drop farther behind, still riding"
+        return match.group(0)
+
+    return _FALL_BACK.sub(replacer, sentence)
+
+
+def _nearer_party(before: str, pursuers: list[str], leads: list[str]) -> str:
+    low = before.lower()
+    last_pursuer = _last_name_at(low, pursuers)
+    last_lead = _last_name_at(low, leads)
+    if last_pursuer < 0 and last_lead < 0:
+        return ""
+    if last_pursuer > last_lead:
+        return "pursuer"
+    return "lead"
+
+
+def _last_name_at(low: str, names: list[str]) -> int:
+    found = -1
+    for name in names:
+        token = name.strip().lower()
+        if len(token) < 3:
+            continue
+        at = low.rfind(token)
+        if at > found:
+            found = at
+    return found
+
+
+def _party_names(staging: StagingMap) -> tuple[list[str], list[str]]:
+    pursuers: list[str] = []
+    leads: list[str] = []
+    for scene in staging.scenes:
+        entities = {item.id: item for item in scene.entities}
+        for relation in scene.relations:
+            if relation.rel != "behind":
+                continue
+            _add_party_names(pursuers, _label(entities, relation.a), relation.a)
+            _add_party_names(leads, _label(entities, relation.b), relation.b)
+        if any(relation.rel == "behind" for relation in scene.relations):
+            _add_party_names(pursuers, "the pursuers", "pursuers")
+    return pursuers, leads
+
+
+def _add_party_names(bucket: list[str], label: str, entity_id: str) -> None:
+    for name in (label, entity_id.replace("_", " ")):
+        cleaned = name.strip()
+        if cleaned and cleaned not in bucket:
+            bucket.append(cleaned)
+    for hint in ("bandit", "bandits", "posse", "outlaw", "outlaws", "pursuer", "pursuers"):
+        if hint in label.lower() and hint not in bucket:
+            bucket.append(hint)
+
+
+def _normalize_draft_prose(draft: dict[str, Any], staging: StagingMap, prompt: str) -> None:
+    pursuers, leads = _party_names(staging)
+    if not pursuers:
+        return
+
+    def rewrite(value: object) -> str:
+        return normalize_pursuer_fall_back(str(value or ""), pursuers, leads, story=prompt)
+
+    shots = draft.get("shots")
+    if isinstance(shots, list):
+        for shot in shots:
+            if not isinstance(shot, dict):
+                continue
+            for field in ("prompt_still", "prompt_motion", "start_state", "end_state"):
+                if field in shot:
+                    shot[field] = rewrite(shot.get(field))
+            camera = shot.get("camera")
+            if isinstance(camera, dict) and "exit_frame" in camera:
+                camera["exit_frame"] = rewrite(camera.get("exit_frame"))
+    beat_map = draft.get("beat_map")
+    if isinstance(beat_map, list):
+        for item in beat_map:
+            if isinstance(item, dict) and "summary" in item:
+                item["summary"] = rewrite(item.get("summary"))
+
+
+def _ensure_lookback_motion(shots: list[Any], staging: StagingMap, style: str) -> None:
+    scenes = {scene.id: scene for scene in staging.scenes}
+    for shot in shots:
+        if not isinstance(shot, dict):
+            continue
+        stage = shot.get("stage")
+        if not isinstance(stage, dict):
+            continue
+        scene = scenes.get(str(stage.get("scene_id") or ""))
+        if scene is None and len(staging.scenes) == 1:
+            scene = staging.scenes[0]
+        entities = {item.id: item for item in (scene.entities if scene else [])}
+        sentence = ""
+        # stage.end is the action of this shot. stage.start is the previous
+        # shot's exit, so a look-back that only opens the frame is not repeated.
+        for block in stage.get("end") or []:
+            if not isinstance(block, dict):
+                continue
+            look = str(block.get("look") or "")
+            travel = str(block.get("travel") or "")
+            if not _looks_back(look, travel) or not _is_mounted_rider(block, entities, style):
+                continue
+            sentence = _capitalize_sentences(_twist_sentence(look, travel) + ".")
+            break
+        if not sentence:
+            continue
+        motion = str(shot.get("prompt_motion") or "")
+        if "twists at the waist in the saddle" in motion.lower():
+            continue
+        shot["prompt_motion"] = f"{motion.rstrip().rstrip('.')}. {sentence}".strip()
+
+
+def _keep_pursuers_riding(shots: list[Any], staging: StagingMap, prompt: str) -> None:
+    """Final-shot pursuers stay mounted unless the story says they stop."""
+    if _STORY_ALLOWS_STOP.search(prompt or ""):
+        return
+    scenes = {scene.id: scene for scene in staging.scenes}
+    for shot in shots:
+        if not isinstance(shot, dict) or str(shot.get("beat") or "") != "button":
+            continue
+        stage = shot.get("stage")
+        if not isinstance(stage, dict):
+            continue
+        scene = scenes.get(str(stage.get("scene_id") or ""))
+        if scene is None and len(staging.scenes) == 1:
+            scene = staging.scenes[0]
+        if scene is None:
+            continue
+        travel = scene.travel if scene.travel and scene.travel != "static" else "screen_right"
+        pursuers = _pursuer_ids(list(stage.get("relations") or []) + list(scene.relations))
+        for block in stage.get("end") or []:
+            if not isinstance(block, dict) or block.get("id") not in pursuers:
+                continue
+            if block.get("travel") == "static":
+                block["travel"] = travel
+
+
+def _strip_scene_mounts(staging: StagingMap) -> None:
+    for scene in staging.scenes:
+        entities = {item.id: item for item in scene.entities}
+        scene.relations = [
+            item for item in scene.relations if not _is_self_mount_relation(item, entities)
+        ]
+
+
+def _strip_shot_mounts(shots: list[Any], staging: StagingMap) -> None:
+    scenes = {scene.id: scene for scene in staging.scenes}
+    for shot in shots:
+        if not isinstance(shot, dict):
+            continue
+        stage = shot.get("stage")
+        if not isinstance(stage, dict):
+            continue
+        scene = scenes.get(str(stage.get("scene_id") or ""))
+        if scene is None and len(staging.scenes) == 1:
+            scene = staging.scenes[0]
+        entities = {item.id: item for item in (scene.entities if scene else [])}
+        stage["relations"] = [
+            item
+            for item in stage.get("relations") or []
+            if not _is_self_mount_relation(item, entities)
+        ]
+
+
+def _looks_back(look: str, travel: str) -> bool:
+    if not look or look == travel or travel == "static":
+        return False
+    return _OPPOSITE_TRAVEL.get(travel) == look
+
+
+def _twist_sentence(look: str, travel: str) -> str:
+    side = _LOOK_PHRASE.get(look, look.replace("_", " "))
+    way = _LOOK_PHRASE.get(travel, travel.replace("_", " "))
+    return (
+        "twists at the waist in the saddle, head and shoulders turned toward "
+        f"{side} to face the pursuers, revolver arm extended back toward them, "
+        f"horse keeps galloping toward {way} in side profile"
+    )
+
+
+def _lookback_sentence(blocks: list[Any], entities: dict[str, Any], style: str) -> str:
+    for block in blocks:
+        look = str(_value(block, "look") or "")
+        travel = str(_value(block, "travel") or "")
+        if _looks_back(look, travel) and _is_mounted_rider(block, entities, style):
+            label = _label(entities, str(_value(block, "id") or ""))
+            return _capitalize_sentences(f"{label} {_twist_sentence(look, travel)}.")
+    return ""
+
+
+def _pursuer_profile(
+    block: Any,
+    entities: dict[str, Any],
+    relations: list[Any],
+    style: str,
+) -> str:
+    travel = str(_value(block, "travel") or "")
+    if travel not in {"screen_left", "screen_right"}:
+        return ""
+    if not _is_pursuer(str(_value(block, "id") or ""), relations):
+        return ""
+    if not _scene_is_mounted(block, entities, style):
+        return ""
+    side = _LOOK_PHRASE.get(travel, travel.replace("_", " "))
+    return f"horses in side profile, galloping toward {side}"
+
+
+def _scene_is_mounted(block: Any, entities: dict[str, Any], style: str) -> bool:
+    if style == "chase":
+        return True
+    blobs = [_label(entities, str(_value(block, "id") or ""))]
+    blobs.extend(_label(entities, entity_id) for entity_id in entities)
+    return any(_HORSE_PARTY.search(blob) for blob in blobs)
+
+
+def _is_mounted_rider(block: Any, entities: dict[str, Any], style: str) -> bool:
+    entity_id = str(_value(block, "id") or "")
+    entity = entities.get(entity_id)
+    if _is_mount_entity(entity):
+        return False
+    if style == "chase":
+        return True
+    label = _label(entities, entity_id)
+    return _HORSE_PARTY.search(label) is not None
+
+
+def _is_pursuer(entity_id: str, relations: list[Any]) -> bool:
+    return entity_id in _pursuer_ids(relations)
+
+
+def _pursuer_ids(relations: list[Any]) -> set[str]:
+    found: set[str] = set()
+    for item in relations:
+        left, rel, _right = _rel_parts(item)
+        if rel == "behind" and left:
+            found.add(left)
+    return found
+
+
+def _self_mount_ids(relations: list[Any], entities: dict[str, Any]) -> set[str]:
+    found: set[str] = set()
+    mapped = _entity_map(entities)
+    for item in relations:
+        if not _is_self_mount_relation(item, mapped):
+            continue
+        left, _rel, right = _rel_parts(item)
+        if _is_mount_entity(mapped.get(left)):
+            found.add(left)
+        if _is_mount_entity(mapped.get(right)):
+            found.add(right)
+    return found
+
+
+def _self_mount_riders(relations: list[Any], entities: dict[str, Any]) -> set[str]:
+    found: set[str] = set()
+    mapped = _entity_map(entities)
+    for item in relations:
+        if not _is_self_mount_relation(item, mapped):
+            continue
+        left, _rel, right = _rel_parts(item)
+        if not _is_mount_entity(mapped.get(left)):
+            found.add(left)
+        if not _is_mount_entity(mapped.get(right)):
+            found.add(right)
+    return found
+
+
+def _is_self_mount_relation(relation: Any, entities: dict[str, Any]) -> bool:
+    """True when the relation ties a rider to that rider's own horse."""
+    left_id, rel, right_id = _rel_parts(relation)
+    mapped = _entity_map(entities)
+    left = mapped.get(left_id)
+    right = mapped.get(right_id)
+    if left is None or right is None:
+        return False
+    if _is_mount_entity(left) and not _is_mount_entity(right):
+        mount, rider = left, right
+    elif _is_mount_entity(right) and not _is_mount_entity(left):
+        mount, rider = right, left
+    else:
+        return False
+    if _belongs_to_rider(mount, rider):
+        return True
+    _label_text, _eid, kind = _entity_bits(rider)
+    return rel == "beside" and kind == "character"
+
+
+def _is_mount_entity(entity: Any) -> bool:
+    if entity is None:
+        return False
+    label, eid, kind = _entity_bits(entity)
+    if kind == "group" or _ASTRIDE.search(label):
+        return False
+    return _MOUNT_WORD.search(f"{label} {eid.replace('_', ' ')}") is not None
+
+
+def _belongs_to_rider(mount: Any, rider: Any) -> bool:
+    mount_label, mount_id, _mount_kind = _entity_bits(mount)
+    rider_label, rider_id, _rider_kind = _entity_bits(rider)
+    blob = f"{mount_label} {mount_id}".lower().replace("_", " ").replace("-", " ")
+    rider_key = rider_id.lower().replace("-", "_")
+    if rider_key and rider_key in mount_id.lower().replace("-", "_"):
+        return True
+    rider_words = rider_id.lower().replace("_", " ").replace("-", " ")
+    if rider_words and rider_words in blob:
+        return True
+    for bit in re.findall(r"[a-z0-9']+", rider_label.lower()):
+        if bit in _NAME_STOP or len(bit) < 3:
+            continue
+        if bit in blob:
+            return True
+    return re.search(r"\b(?:his|her|their)\b", mount_label, re.IGNORECASE) is not None
+
+
+def _entity_map(entities: dict[str, Any]) -> dict[str, Any]:
+    if not entities:
+        return {}
+    mapped: dict[str, Any] = {}
+    for key, entity in entities.items():
+        mapped[str(key)] = entity
+        eid = _entity_bits(entity)[1]
+        if eid:
+            mapped[eid] = entity
+    return mapped
+
+
+def _entity_bits(entity: Any) -> tuple[str, str, str]:
+    if isinstance(entity, dict):
+        return (
+            str(entity.get("label") or ""),
+            str(entity.get("id") or ""),
+            str(entity.get("kind") or ""),
+        )
+    return (
+        str(getattr(entity, "label", "") or ""),
+        str(getattr(entity, "id", "") or ""),
+        str(getattr(entity, "kind", "") or ""),
+    )
+
+
+def _rel_parts(relation: Any) -> tuple[str, str, str]:
+    if isinstance(relation, dict):
+        return (
+            str(relation.get("a") or ""),
+            str(relation.get("rel") or ""),
+            str(relation.get("b") or ""),
+        )
+    return (str(relation.a), str(relation.rel), str(relation.b))
+
+
+def _value(item: Any, name: str) -> Any:
+    if isinstance(item, dict):
+        return item.get(name)
+    return getattr(item, name, None)
+
+
+def _capitalize_sentences(text: str) -> str:
+    return _SENTENCE_START.sub(lambda match: match.group(1) + match.group(2).upper(), text)
+
+
+def _polish_clause(text: str) -> str:
+    polished: list[str] = []
+    for line in text.split("\n"):
+        if line.startswith("- "):
+            polished.append(_AFTER_PERIOD.sub(lambda match: match.group(1).upper(), line))
+        elif line == STAGING_HEADER:
+            polished.append(line)
+        else:
+            polished.append(_capitalize_sentences(line))
+    return "\n".join(polished)
 
 
 def _signature(blocks: list[Any]) -> tuple[tuple[Any, ...], ...]:

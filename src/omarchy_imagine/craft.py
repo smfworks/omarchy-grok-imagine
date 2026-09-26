@@ -165,10 +165,14 @@ _POSE = {
         "setup": "rides hard toward screen-right with the pursuers far behind on the left",
         "turn": "keeps riding screen-right while the pursuers close from behind on the left",
         "climax": (
-            "twists in the saddle and aims back toward screen-left, "
-            "while the horse keeps traveling screen-right"
+            "twists at the waist in the saddle, head and shoulders turned toward "
+            "screen-left to face the pursuers, revolver arm extended back toward them, "
+            "horse keeps galloping toward screen-right in side profile"
         ),
-        "button": "breaks away toward screen-right as the pursuers fall back on the left",
+        "button": (
+            "breaks away toward screen-right as the pursuers drop farther behind, "
+            "still riding, on the left"
+        ),
     },
     "quiet_drama": {
         "setup": "stands in the quiet with one clear want and does not speak it yet",
@@ -201,10 +205,14 @@ _POSE_END = {
         "setup": "the lead riding screen-right, pursuers far behind on the left",
         "turn": "the pursuers closer behind on the left, travel still screen-right",
         "climax": (
-            "the lead twisted back toward screen-left, horse still traveling screen-right, "
+            "the lead twisted at the waist toward screen-left, revolver arm back toward "
+            "the pursuers, horse still galloping screen-right in side profile, "
             "pursuers behind on the left"
         ),
-        "button": "the lead small toward screen-right, pursuers halted behind on the left",
+        "button": (
+            "the lead small toward screen-right, pursuers drop farther behind, "
+            "still riding, on the left"
+        ),
     },
     "quiet_drama": {
         "setup": "the figure still in the quiet, the want not yet spoken",
@@ -236,18 +244,22 @@ _ACTION = {
     "chase": {
         "setup": (
             "Rides hard toward screen-right on the right third, "
-            "with the pursuers far behind on the left third"
+            "with the pursuers far behind on the left third, horses in side profile, "
+            "galloping toward screen-right"
         ),
         "turn": (
             "Keeps traveling screen-right while the pursuers close the gap "
-            "from behind on the left third"
+            "from behind on the left third, horses in side profile, "
+            "galloping toward screen-right"
         ),
         "climax": (
-            "Twists in the saddle and aims back toward screen-left at the pursuers, "
-            "while travel stays screen-right"
+            "Twists at the waist in the saddle, head and shoulders turned toward "
+            "screen-left to face the pursuers, revolver arm extended back toward them, "
+            "horse keeps galloping toward screen-right in side profile"
         ),
         "button": (
-            "Breaks away toward screen-right and the pursuers fall back, halted on the left"
+            "Breaks away toward screen-right and the pursuers drop farther behind, "
+            "still riding, on the left"
         ),
     },
     "quiet_drama": {
@@ -304,10 +316,13 @@ _SUMMARY = {
             "A turn is a torso twist, not a reversal."
         ),
         "climax": (
-            "Climax. The lead twists and aims back toward the pursuers in {story}. "
-            "Travel does not reverse."
+            "Climax. The lead twists at the waist in the saddle and aims back toward "
+            "the pursuers in {story}. The horse keeps galloping. Travel does not reverse."
         ),
-        "button": "Button. The lead breaks away. The pursuers fall back. One held picture.",
+        "button": (
+            "Button. The lead breaks away. The pursuers drop farther behind, still riding. "
+            "One held picture."
+        ),
     },
 }
 

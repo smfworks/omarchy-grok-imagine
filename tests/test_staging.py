@@ -12,7 +12,12 @@ from omarchy_imagine.pipeline import build_motion_prompt, build_still_prompt
 from omarchy_imagine.plan import PlanBrief, PlanIn, StoryDraft, _messages, plan_pack
 from omarchy_imagine.preflight import preflight
 from omarchy_imagine.schema import PackIn
-from omarchy_imagine.staging import STAGING_HEADER, staging_clause
+from omarchy_imagine.staging import (
+    STAGING_HEADER,
+    apply_staging,
+    normalize_pursuer_fall_back,
+    staging_clause,
+)
 from tests.samples import AUTH
 
 ROOT = Path(__file__).resolve().parent
@@ -106,8 +111,17 @@ def test_staging_clause_locks_positions_and_forbids_riding_beside() -> None:
     assert "BEHIND" in still
     assert "Nobody rides beside" in still
     assert "never pass" in still
+    assert "The three bandits on dark horses never pass" in still
+    assert ". the " not in still
     assert "never appear on the right of frame" in still
-    assert "looks toward screen-left" in motion
+    assert "horses in side profile, galloping toward screen-right" in still
+    twist = (
+        "twists at the waist in the saddle, head and shoulders turned toward "
+        "screen-left to face the pursuers, revolver arm extended back toward them, "
+        "horse keeps galloping toward screen-right in side profile"
+    )
+    assert twist in motion
+    assert "looks toward screen-left" not in motion
     assert "Change:" in motion
     assert "Nobody rides beside" in motion
     unlocked = pack.model_copy(update={"lock_staging": False})
@@ -378,6 +392,22 @@ def test_heuristic_chase_is_staged_without_a_network_call(
     assert "side_flip" not in _codes(report)
     assert "relation_violation" not in _codes(report)
     assert "Nobody rides beside" in report["shots"][0]["motion_prompt"]
+    assert "horses in side profile, galloping toward screen-right" in report["shots"][0][
+        "motion_prompt"
+    ]
+    climax = pack.shots[2]
+    assert climax.stage is not None
+    assert "twists at the waist in the saddle" in climax.prompt_motion.lower()
+    assert "twists at the waist in the saddle" in report["shots"][2]["motion_prompt"].lower()
+    button = pack.shots[-1]
+    assert button.stage is not None
+    assert "drop farther behind, still riding" in button.prompt_motion
+    assert "fall back" not in button.prompt_motion.lower()
+    assert "halted" not in button.prompt_motion.lower()
+    assert "twists at the waist" not in button.prompt_motion.lower()
+    pursuers = next(block for block in button.stage.end if block.id == "pursuers")
+    assert pursuers.travel == "screen_right"
+    assert "lock_drift" not in _codes(report)
     blob = json.dumps(pack.model_dump())
     assert "http://" not in blob
     assert "https://" not in blob
@@ -545,6 +575,11 @@ def test_plan_messages_restate_positions_and_keep_turns_as_twists() -> None:
     assert "screen-left" in system
     assert "cross_reason" in system
     assert "only what changes" not in system
+    assert "twists at the waist in the saddle" in system
+    assert "horses in side profile" in system
+    assert "drop farther behind, still riding" in system
+    assert "fallen back" in system
+    assert "own horse" in system
 
 
 def test_plan_route_accepts_cast_and_staging(client, app) -> None:
@@ -613,3 +648,306 @@ def test_plan_route_accepts_cast_and_staging(client, app) -> None:
         "stitched_episode",
     ):
         assert job[gate] is False
+
+
+_TWIST = (
+    "twists at the waist in the saddle, head and shoulders turned toward "
+    "screen-left to face the pursuers, revolver arm extended back toward them, "
+    "horse keeps galloping toward screen-right in side profile"
+)
+
+
+def test_lookback_clause_and_motion_prompt_name_the_saddle_twist() -> None:
+    pack = _pack()
+    shot = pack.shots[2]
+    still = staging_clause(pack, shot, "still")
+    motion = staging_clause(pack, shot, "motion")
+    assembled = build_motion_prompt(shot.model_dump(), pack=pack)
+    assert _TWIST in still
+    assert _TWIST in motion
+    assert _TWIST in assembled
+    assert "horses in side profile, galloping toward screen-right" in motion
+    # A look toward the camera is not a saddle twist.
+    foot = copy.deepcopy(_load())
+    foot["style_preset"] = "quiet_drama"
+    foot["shots"][0]["stage"]["end"][0]["look"] = "toward_camera"
+    foot["shots"][0]["stage"]["end"][0]["travel"] = "screen_right"
+    quiet = PackIn.model_validate(foot)
+    quiet_motion = staging_clause(quiet, quiet.shots[0], "motion")
+    assert "twists at the waist" not in quiet_motion
+    assert "looks toward the camera" in quiet_motion
+
+
+def test_fall_back_is_rewritten_for_pursuers_and_not_the_lead() -> None:
+    text = (
+        "The bandits fall back. The bandits have fallen back. "
+        "Jack falls back into the rocks."
+    )
+    rewritten = normalize_pursuer_fall_back(text, ["the bandits", "bandits"], ["Jack"])
+    assert rewritten.count("drop farther behind, still riding") == 2
+    assert "Jack falls back into the rocks." in rewritten
+    assert "fall back" not in rewritten.lower().split("jack")[0]
+
+    kept = normalize_pursuer_fall_back(
+        "The bandits have fallen back.",
+        ["the bandits"],
+        ["Jack"],
+        story="The bandits tumble from the saddle at the canyon.",
+    )
+    assert kept == "The bandits have fallen back."
+
+    story = StoryDraft.model_validate(
+        {
+            "title": "Dust",
+            "logline": "Bandits chase a cowboy.",
+            "opening_state": "Jack is ahead.",
+            "style_preset": "chase",
+            "staging": {
+                "scenes": [
+                    {
+                        "id": "sc1",
+                        "shot_ids": ["1", "2"],
+                        "axis": "the trail",
+                        "travel": "screen_right",
+                        "entities": [
+                            {"id": "jack", "label": "Jack", "kind": "character", "count": 1},
+                            {
+                                "id": "bandits",
+                                "label": "the bandits",
+                                "kind": "group",
+                                "count": 3,
+                            },
+                        ],
+                        "relations": [
+                            {"a": "bandits", "rel": "behind", "b": "jack", "gap": "far"}
+                        ],
+                    }
+                ]
+            },
+            "shots": [
+                {
+                    "prompt_still": "Jack rides screen-right. The bandits are behind.",
+                    "prompt_motion": "Jack rides toward screen-right.",
+                    "end_state": "Jack on the right. The bandits fall back.",
+                    "beat": "setup",
+                    "stage": {
+                        "scene_id": "sc1",
+                        "start": [
+                            _block("jack", "center"),
+                            _block("bandits", "left_edge", depth="far"),
+                        ],
+                        "end": [
+                            _block("jack", "right_third"),
+                            _block("bandits", "left_third", depth="far"),
+                        ],
+                    },
+                },
+                {
+                    "prompt_still": "The bandits have fallen back and stand still.",
+                    "prompt_motion": "The bandits fall back on the left.",
+                    "end_state": "The bandits have fallen back.",
+                    "beat": "button",
+                    "stage": {
+                        "scene_id": "sc1",
+                        "start": [
+                            _block("jack", "right_third"),
+                            _block("bandits", "left_third", depth="far"),
+                        ],
+                        "end": [
+                            _block("jack", "right_edge"),
+                            _block("bandits", "left_third", depth="mid", travel="static"),
+                        ],
+                    },
+                },
+            ],
+        }
+    )
+
+    class FakePlanner:
+        def plan_story(self, brief: object) -> StoryDraft:
+            return story
+
+    pack = plan_pack(
+        PlanIn(prompt="A lone cowboy is chased by bandits.", target_duration_sec=16),
+        planner=FakePlanner(),
+    )
+    blob = " ".join(
+        f"{shot.prompt_still} {shot.prompt_motion} {shot.end_state}" for shot in pack.shots
+    )
+    assert "fall back" not in blob.lower()
+    assert "fallen back" not in blob.lower()
+    assert "drop farther behind, still riding" in blob
+    assert pack.shots[1].stage is not None
+    bandits = next(block for block in pack.shots[1].stage.end if block.id == "bandits")
+    assert bandits.travel == "screen_right"
+    assert pack.shots[1].start_state == pack.shots[0].end_state
+
+
+def test_a_riders_own_mount_is_not_a_separate_beside_relation() -> None:
+    scene = {
+        "id": "sc1",
+        "shot_ids": ["s01"],
+        "axis": "the road",
+        "travel": "screen_right",
+        "entities": [
+            {"id": "cole", "label": "Cole", "kind": "character", "count": 1},
+            {
+                "id": "cole_horse",
+                "label": "Cole's chestnut horse",
+                "kind": "prop",
+                "count": 1,
+            },
+            {"id": "bandits", "label": "the bandits", "kind": "group", "count": 3},
+        ],
+        "relations": [
+            {"a": "bandits", "rel": "behind", "b": "cole", "gap": "far"},
+            {"a": "cole", "rel": "beside", "b": "cole_horse", "gap": "touching"},
+        ],
+    }
+    body = {
+        "title": "Cole",
+        "style_preset": "chase",
+        "lock_staging": True,
+        "staging": {"scenes": [scene]},
+        "shots": [
+            {
+                "id": "s01",
+                "prompt_still": "Cole rides screen-right.",
+                "prompt_motion": "Cole rides toward screen-right.",
+                "stage": {
+                    "scene_id": "sc1",
+                    "camera_side": "same",
+                    "start": [
+                        _block("cole", "right_third"),
+                        _block("cole_horse", "right_third"),
+                        _block("bandits", "left_third", depth="far"),
+                    ],
+                    "end": [
+                        _block("cole", "right_third"),
+                        _block("cole_horse", "right_third"),
+                        _block("bandits", "left_third", depth="far"),
+                    ],
+                    "relations": scene["relations"],
+                },
+            }
+        ],
+    }
+    pack = PackIn.model_validate(body)
+    clause = staging_clause(pack, pack.shots[0], "still")
+    assert "beside Cole's chestnut horse" not in clause
+    assert "Cole's chestnut horse:" not in clause
+    assert "Nobody rides beside Cole." in clause
+    assert clause.lower().count("nobody rides beside") == 1
+
+    draft = {
+        "style_preset": "chase",
+        "shots": [
+            {
+                "id": "s01",
+                "prompt_still": "Cole rides.",
+                "prompt_motion": "Cole rides toward screen-right.",
+                "beat": "setup",
+            }
+        ],
+    }
+    apply_staging(
+        draft,
+        style="chase",
+        prompt="Cole is chased by bandits.",
+        supplied={"scenes": [scene]},
+    )
+    stored = draft["staging"]["scenes"][0]["relations"]
+    assert all(item["rel"] != "beside" for item in stored)
+    assert draft["shots"][0]["stage"]["relations"]
+    assert all(item["rel"] != "beside" for item in draft["shots"][0]["stage"]["relations"])
+
+
+def test_scene_shot_ids_map_onto_the_real_shot_ids() -> None:
+    shots = [
+        {
+            "id": f"s0{index}",
+            "prompt_still": "A frame",
+            "prompt_motion": "It moves",
+            "beat": "setup",
+        }
+        for index in range(1, 5)
+    ]
+    entities = [
+        {"id": "jack", "label": "Jack", "kind": "character", "count": 1},
+        {"id": "bandits", "label": "the bandits", "kind": "group", "count": 3},
+    ]
+    relations = [{"a": "bandits", "rel": "behind", "b": "jack", "gap": "far"}]
+    draft = {"shots": shots}
+    apply_staging(
+        draft,
+        style="generic",
+        prompt="Two rooms, no chase.",
+        model_staging={
+            "scenes": [
+                {
+                    "id": "sc1",
+                    "shot_ids": ["1", "2"],
+                    "axis": "the yard",
+                    "travel": "screen_right",
+                    "entities": entities,
+                    "relations": relations,
+                },
+                {
+                    "id": "sc2",
+                    "shot_ids": ["3", "4"],
+                    "axis": "the street",
+                    "travel": "screen_right",
+                    "entities": entities,
+                    "relations": relations,
+                },
+            ]
+        },
+    )
+    assert draft["staging"]["scenes"][0]["shot_ids"] == ["s01", "s02"]
+    assert draft["staging"]["scenes"][1]["shot_ids"] == ["s03", "s04"]
+
+    linked = {
+        "shots": [
+            {
+                "id": "s01",
+                "stage": {
+                    "scene_id": "sc1",
+                    "start": [_block("jack", "center")],
+                    "end": [_block("jack", "center")],
+                },
+            },
+            {
+                "id": "s02",
+                "stage": {
+                    "scene_id": "sc2",
+                    "start": [_block("jack", "center")],
+                    "end": [_block("jack", "center")],
+                },
+            },
+        ]
+    }
+    apply_staging(
+        linked,
+        style="generic",
+        prompt="Two rooms, no chase.",
+        model_staging={
+            "scenes": [
+                {
+                    "id": "sc1",
+                    "shot_ids": ["1"],
+                    "travel": "screen_right",
+                    "entities": entities,
+                    "relations": [],
+                },
+                {
+                    "id": "sc2",
+                    "shot_ids": ["2"],
+                    "travel": "screen_right",
+                    "entities": entities,
+                    "relations": [],
+                },
+            ]
+        },
+    )
+    assert linked["staging"]["scenes"][0]["shot_ids"] == ["s01"]
+    assert linked["staging"]["scenes"][1]["shot_ids"] == ["s02"]
