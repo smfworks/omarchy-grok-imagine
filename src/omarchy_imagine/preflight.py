@@ -11,6 +11,7 @@ are not applied.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -202,6 +203,231 @@ _ANCHOR_STOP = frozenset(
     }
 )
 
+# Descriptive words the planner varies from shot to shot. They are not identity.
+_GENERIC = frozenset(
+    {
+        "long",
+        "short",
+        "tall",
+        "wide",
+        "narrow",
+        "big",
+        "small",
+        "large",
+        "little",
+        "high",
+        "low",
+        "deep",
+        "soft",
+        "hard",
+        "warm",
+        "cool",
+        "cold",
+        "hot",
+        "bright",
+        "dark",
+        "light",
+        "heavy",
+        "thin",
+        "thick",
+        "old",
+        "young",
+        "new",
+        "worn",
+        "dusty",
+        "dirty",
+        "clean",
+        "rough",
+        "smooth",
+        "sharp",
+        "dull",
+        "pale",
+        "rich",
+        "muted",
+        "bare",
+        "lone",
+        "full",
+        "open",
+        "closed",
+        "faded",
+        "weathered",
+        "lean",
+        "raw",
+        "plain",
+        "early",
+        "late",
+        "strong",
+        "weak",
+        "quick",
+        "slow",
+        "fast",
+        "rugged",
+        "grizzled",
+        "colored",
+        "coloured",
+        "slight",
+        "slightly",
+        "natural",
+        "visual",
+        "cinematic",
+    }
+)
+_GENERIC_NOUNS = frozenset(
+    {
+        "shadow",
+        "shadows",
+        "sun",
+        "sunlight",
+        "sunset",
+        "sundown",
+        "sunrise",
+        "dawn",
+        "dusk",
+        "sky",
+        "skies",
+        "dust",
+        "haze",
+        "fog",
+        "lighting",
+        "contrast",
+        "grade",
+        "palette",
+        "color",
+        "colors",
+        "colour",
+        "colours",
+        "shot",
+        "shots",
+        "frame",
+        "frames",
+        "scene",
+        "film",
+        "lens",
+        "camera",
+        "clothes",
+        "clothing",
+        "outfit",
+        "garment",
+        "garments",
+        "wear",
+        "wearing",
+        "dressed",
+        "figure",
+        "person",
+        "people",
+        "man",
+        "woman",
+        "rider",
+        "riders",
+        "horse",
+        "horses",
+        "face",
+        "body",
+        "type",
+        "look",
+        "style",
+        "image",
+        "unchanged",
+        "constant",
+        "direction",
+        "hour",
+        "first",
+        "last",
+        "ground",
+        "desert",
+        "trail",
+        "light",
+        "lights",
+    }
+)
+# A bare palette list is not a lock. These count only from wardrobe, markers,
+# or an explicit "locked <color>" / "the same <color>" phrase.
+_COLOR_WORDS = frozenset(
+    {
+        "red",
+        "blue",
+        "rust",
+        "gold",
+        "indigo",
+        "amber",
+        "sand",
+        "crimson",
+        "scarlet",
+        "navy",
+        "black",
+        "white",
+        "brown",
+        "green",
+        "grey",
+        "gray",
+        "tan",
+        "ochre",
+        "ocher",
+        "copper",
+        "bronze",
+        "silver",
+        "yellow",
+        "orange",
+        "purple",
+        "violet",
+        "pink",
+        "maroon",
+        "burgundy",
+        "cream",
+        "ivory",
+        "charcoal",
+        "olive",
+        "teal",
+        "khaki",
+        "denim",
+        "chestnut",
+        "buckskin",
+        "blonde",
+        "blond",
+        "auburn",
+        "cyan",
+        "beige",
+        "pearl",
+        "cobalt",
+        "azure",
+        "sienna",
+        "umber",
+        "sepia",
+        "turquoise",
+        "lavender",
+        "coral",
+    }
+)
+_EXPLICIT_COLOR = re.compile(
+    r"\b(?:locked|unchanged|always)\s+([A-Za-z]+)"
+    r"|\b([A-Za-z]+)\s+(?:locked|unchanged)\b"
+    r"|\bsame\s+([A-Za-z]+)\b",
+    re.IGNORECASE,
+)
+_WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
+
+
+@dataclass(frozen=True)
+class _Member:
+    """Display-cased names. ``keys`` is the lowercase set used for matching."""
+
+    names: tuple[str, ...]
+
+    @property
+    def keys(self) -> frozenset[str]:
+        return frozenset(name.lower() for name in self.names)
+
+
+@dataclass(frozen=True)
+class _Anchor:
+    """One identity word and the cast names it belongs to.
+
+    Empty ``owners`` means the lock is pack-wide. Owners are lowercase.
+    """
+
+    word: str
+    owners: frozenset[str]
+
 
 class PreflightIssue(BaseModel):
     code: str
@@ -262,8 +488,8 @@ def preflight(pack: PackIn) -> dict[str, Any]:
     bible = render_look_bible(pack.look_bible)
     cast = [item.model_dump() for item in pack.cast]
     anchors = _anchor_words(pack)
+    established: set[str] = set()
     shots: list[PreflightShot] = []
-    previous_still = ""
     for index, shot in enumerate(pack.shots):
         seeded, mode, image_note = _still_plan(index, cast, ffmpeg_ready)
         shot_dict = shot.model_dump()
@@ -287,8 +513,7 @@ def preflight(pack: PackIn) -> dict[str, Any]:
             reference_note=reference_note,
             pack=pack,
         )
-        issues = _shot_issues(pack, index, anchors, previous_still)
-        previous_still = shot.prompt_still
+        issues = _shot_issues(pack, index, anchors, established)
         shots.append(
             PreflightShot(
                 id=shot.id,
@@ -340,8 +565,8 @@ def _still_plan(
 def _shot_issues(
     pack: PackIn,
     index: int,
-    anchors: list[str],
-    previous_still: str,
+    anchors: list[_Anchor],
+    established: set[str],
 ) -> list[PreflightIssue]:
     shot = pack.shots[index]
     issues: list[PreflightIssue] = []
@@ -385,13 +610,16 @@ def _shot_issues(
                 ),
             )
         )
-    # A lock that is absent from every still is not drift. Warn only when a
-    # locked word is in one shot and missing from the next.
+    # Generic adjectives and palette lists are not locks. Warn only when a
+    # name, wardrobe item, or explicitly locked color is missing from a shot
+    # where that character appears, after an earlier shot established it.
     if index > 0 and anchors:
         drifted = [
-            word
-            for word in anchors
-            if _contains_word(previous_still, word) != _contains_word(shot.prompt_still, word)
+            anchor.word
+            for anchor in anchors
+            if anchor.word.lower() in established
+            and not _contains_word(shot.prompt_still, anchor.word)
+            and _anchor_relevant(pack, shot, anchor)
         ]
         if drifted:
             shown = drifted[:6]
@@ -407,6 +635,9 @@ def _shot_issues(
                     ),
                 )
             )
+    for anchor in anchors:
+        if _contains_word(shot.prompt_still, anchor.word):
+            established.add(anchor.word.lower())
     if pack.resolution == "1080p" and shot.video_mode == "reference_to_video":
         _sent, note = reference_video_resolution(pack.resolution)
         issues.append(
@@ -485,27 +716,234 @@ def _banned_cuts(*parts: str) -> list[str]:
     return seen
 
 
-def _anchor_words(pack: PackIn) -> list[str]:
-    """Content words from the look bible and cast that a still should repeat."""
-    blobs: list[tuple[str, int]] = []
-    bible = pack.look_bible
-    for field in ("cast", "wardrobe", "palette", "lighting", "camera"):
-        blobs.append((getattr(bible, field), 4))
+def _anchor_words(pack: PackIn) -> list[_Anchor]:
+    """Names, wardrobe items, and explicitly locked colors. Not palette filler."""
+    members = _cast_members(pack)
+    anchors: list[_Anchor] = []
+    seen: set[str] = set()
+
+    def add(word: str, owners: frozenset[str]) -> None:
+        bare = _bare_token(word)
+        key = bare.lower()
+        if len(key) < 2 or key in _ANCHOR_STOP or key in seen:
+            return
+        seen.add(key)
+        anchors.append(_Anchor(word=bare, owners=owners))
+
+    for member in members:
+        for name in member.names:
+            add(name, member.keys)
     for ref in pack.cast:
-        blobs.append((ref.name, 2))
-        blobs.append((ref.markers, 4))
+        owners = _owners_matching(ref.name, members)
+        for token in _content_tokens(ref.markers):
+            add(token, owners)
+    for word, owners in _wardrobe_anchors(pack.look_bible.wardrobe, members):
+        add(word, owners)
+    for field in (pack.look_bible.palette, pack.look_bible.lighting):
+        for token in _explicit_color_tokens(field):
+            add(token, _owners_matching(field, members))
+    return anchors
+
+
+def _cast_members(pack: PackIn) -> list[_Member]:
+    members: list[_Member] = []
+    for ref in pack.cast:
+        names = _unique_names(_name_tokens(ref.name))
+        if names:
+            members.append(_Member(names=names))
+    bible = pack.look_bible.cast
+    extra = [
+        _bare_token(token)
+        for token in _tokens(bible)
+        if _bare_token(token)[:1].isupper() and not _skip_name(_bare_token(token))
+    ]
+    if not extra:
+        return members
+    mentioned = [
+        member for member in members if any(_contains_word(bible, name) for name in member.names)
+    ]
+    if len(mentioned) == 1:
+        merged = _unique_names([*mentioned[0].names, *extra])
+        return [
+            _Member(names=merged) if member is mentioned[0] else member for member in members
+        ]
+    known = {key for member in members for key in member.keys}
+    for token in extra:
+        key = token.lower()
+        if key in known:
+            continue
+        members.append(_Member(names=(token,)))
+        known.add(key)
+    return members
+
+
+def _unique_names(tokens: list[str]) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        key = token.lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        names.append(token)
+    return tuple(names)
+
+
+def _wardrobe_anchors(text: str, members: list[_Member]) -> list[tuple[str, frozenset[str]]]:
+    if not text.strip():
+        return []
+    if len(members) <= 1:
+        owners = members[0].keys if members else frozenset()
+        return [(word, owners) for word in _content_tokens(text)]
+    found: list[tuple[str, frozenset[str]]] = []
+    for chunk in re.split(r";|\band\b", text):
+        owners = _owners_matching(chunk, members)
+        for word in _content_tokens(chunk):
+            found.append((word, owners))
+    return found
+
+
+def _owners_matching(text: str, members: list[_Member]) -> frozenset[str]:
+    matched: list[str] = []
+    for member in members:
+        if any(_contains_word(text, name) for name in member.keys):
+            matched.extend(member.keys)
+    return frozenset(matched)
+
+
+def _content_tokens(text: str) -> list[str]:
     words: list[str] = []
     seen: set[str] = set()
-    for text, minimum in blobs:
-        for token in re.findall(r"[A-Za-z][A-Za-z'-]*", text):
-            if len(token) < minimum:
+    for token in _tokens(text):
+        for piece in _bare_token(token).split("-"):
+            bare = piece.strip("'")
+            key = bare.lower()
+            if len(key) < 3 or key in seen:
                 continue
-            key = token.lower()
-            if key in _ANCHOR_STOP or key in seen:
+            if key in _ANCHOR_STOP or key in _GENERIC or key in _GENERIC_NOUNS:
                 continue
             seen.add(key)
-            words.append(token)
+            words.append(bare)
     return words
+
+
+def _explicit_color_tokens(text: str) -> list[str]:
+    words: list[str] = []
+    seen: set[str] = set()
+    for match in _EXPLICIT_COLOR.finditer(text or ""):
+        raw = next(group for group in match.groups() if group)
+        key = raw.lower()
+        if key not in _COLOR_WORDS or key in seen:
+            continue
+        seen.add(key)
+        words.append(raw)
+    return words
+
+
+def _name_tokens(text: str) -> list[str]:
+    names: list[str] = []
+    for token in _tokens(text):
+        bare = _bare_token(token)
+        if _skip_name(bare):
+            continue
+        names.append(bare)
+    return names
+
+
+def _skip_name(token: str) -> bool:
+    key = token.lower()
+    return len(key) < 2 or key in _ANCHOR_STOP
+
+
+def _tokens(text: str) -> list[str]:
+    return _WORD.findall(text or "")
+
+
+def _bare_token(token: str) -> str:
+    cleaned = token.strip("'")
+    if cleaned.lower().endswith("'s"):
+        cleaned = cleaned[:-2]
+    return cleaned.strip("'")
+
+
+def _anchor_relevant(pack: PackIn, shot: Any, anchor: _Anchor) -> bool:
+    """True when this still is a picture that should keep the lock.
+
+    With no stage, the look bible applies to every shot. With a stage, a
+    character's lock matters only when that character is in the frame.
+    """
+    stage = getattr(shot, "stage", None)
+    if stage is None:
+        return True
+    if _owner_in_text(shot.prompt_still, anchor, pack):
+        return True
+    return _owner_visible(pack, shot, anchor)
+
+
+def _owner_in_text(text: str, anchor: _Anchor, pack: PackIn) -> bool:
+    names = anchor.owners or _all_cast_names(pack)
+    if not names:
+        return False
+    return any(_contains_word(text, name) for name in names)
+
+
+def _all_cast_names(pack: PackIn) -> frozenset[str]:
+    names: set[str] = set()
+    for member in _cast_members(pack):
+        names.update(member.keys)
+    return frozenset(names)
+
+
+def _owner_visible(pack: PackIn, shot: Any, anchor: _Anchor) -> bool:
+    stage = shot.stage
+    blocks = list(stage.start or stage.end)
+    entities = _scene_entities(pack, shot)
+    if not anchor.owners:
+        if any(block.visible for block in blocks):
+            return True
+        return _owner_in_text(shot.prompt_still, anchor, pack)
+    for block in blocks:
+        if _block_matches_owner(block, entities, anchor.owners, pack):
+            return True
+    return False
+
+
+def _scene_entities(pack: PackIn, shot: Any) -> dict[str, Any]:
+    staging = pack.staging
+    stage = shot.stage
+    if staging is None or stage is None:
+        return {}
+    scene = None
+    if stage.scene_id:
+        scene = next((item for item in staging.scenes if item.id == stage.scene_id), None)
+    if scene is None:
+        scene = next((item for item in staging.scenes if shot.id in item.shot_ids), None)
+    if scene is None and len(staging.scenes) == 1:
+        scene = staging.scenes[0]
+    if scene is None:
+        return {}
+    return {entity.id: entity for entity in scene.entities}
+
+
+def _block_matches_owner(
+    block: Any,
+    entities: dict[str, Any],
+    owners: frozenset[str],
+    pack: PackIn,
+) -> bool:
+    if not block.visible:
+        return False
+    parts = [str(block.id).replace("_", " ").replace("-", " ")]
+    entity = entities.get(block.id)
+    if entity is not None:
+        parts.append(entity.label)
+        if entity.cast_id:
+            parts.append(entity.cast_id.replace("_", " ").replace("-", " "))
+            for ref in pack.cast:
+                if ref.id == entity.cast_id:
+                    parts.append(ref.name)
+    blob = " ".join(parts)
+    return any(_contains_word(blob, name) for name in owners)
 
 
 def _contains_word(text: str, word: str) -> bool:

@@ -80,7 +80,8 @@ _CONTACT = re.compile(
 )
 _VAGUE = re.compile(r"\b(?:near|next to|alongside|beside)\b", re.IGNORECASE)
 _FALL_BACK = re.compile(
-    r"\b(?:(?:have|has|had|having|been)\s+)?(?:fall|falls|falling|fell|fallen)\s+back\b",
+    r"\b(?:(?:have|has|had|having|been|is|are|was|were)\s+)?"
+    r"(?:fall|falls|falling|fell|fallen)\s+back\b",
     re.IGNORECASE,
 )
 # The story itself asked pursuers to stop or come off the horse. "Fall back"
@@ -102,6 +103,10 @@ _HORSE_PARTY = re.compile(
     re.IGNORECASE,
 )
 _SENTENCE_START = re.compile(r"(^|(?<=\.\s))([a-z])")
+_SUBJECTLESS_TWIST = re.compile(
+    r"(^|(?<=\.\s))Twists at the waist in the saddle",
+    re.IGNORECASE,
+)
 _AFTER_PERIOD = re.compile(r"(?<=\.\s)([a-z])")
 _NAME_STOP = frozenset(
     {
@@ -458,10 +463,14 @@ def _block_line(
 
 def _relation_phrase(entity_id: str, relations: list[Any], entities: dict[str, Any]) -> str:
     for item in relations:
-        if item.a == entity_id and item.rel == "behind":
-            return f"BEHIND {_label(entities, item.b)}"
-        if item.a == entity_id and item.rel:
-            return f"{item.rel} {_label(entities, item.b)}"
+        if item.a != entity_id or not item.rel:
+            continue
+        target = _label(entities, item.b)
+        if item.rel == "behind":
+            return f"BEHIND {target}"
+        if item.rel == "ahead":
+            return f"ahead of {target}"
+        return f"{item.rel} {target}"
     return ""
 
 
@@ -1219,7 +1228,7 @@ def normalize_pursuer_fall_back(
     """
     if not text or not pursuers or not _FALL_BACK.search(text):
         return text
-    if story and _STORY_ALLOWS_STOP.search(story):
+    if _story_stops_pursuers(story, pursuers, leads):
         return text
     parts = re.split(r"([.!?])", text)
     out: list[str] = []
@@ -1235,11 +1244,62 @@ def normalize_pursuer_fall_back(
 def _rewrite_fall_back_sentence(sentence: str, pursuers: list[str], leads: list[str]) -> str:
     def replacer(match: re.Match[str]) -> str:
         before = sentence[: match.start()]
-        if _nearer_party(before, pursuers, leads) == "pursuer":
-            return "drop farther behind, still riding"
-        return match.group(0)
+        if _nearer_party(before, pursuers, leads) != "pursuer":
+            return match.group(0)
+        if _fall_back_is_singular(match.group(0), before):
+            return "drops farther behind, still riding"
+        return "drop farther behind, still riding"
 
     return _FALL_BACK.sub(replacer, sentence)
+
+
+def _fall_back_is_singular(phrase: str, before: str) -> bool:
+    """Agree with the pursuer: 'a bandit falls back' is singular."""
+    low = phrase.lower()
+    if re.search(r"\b(?:falls|has|is|was)\b", low):
+        return True
+    if re.search(r"\b(?:have|are|were)\b", low):
+        return False
+    window = before.lower()[-160:]
+    if re.search(r"\b(?:a|an|one|another)\s+[a-z]+\s*$", window) and not re.search(
+        r"\b(?:bandits|outlaws|pursuers|riders|horses|men|they)\s*$",
+        window,
+    ):
+        return True
+    plural = _last_word(
+        window,
+        ("bandits", "outlaws", "pursuers", "riders", "horses", "men", "they", "posse"),
+    )
+    singular = _last_word(window, ("bandit", "outlaw", "pursuer", "rider", "horse", "man"))
+    if singular > plural:
+        return True
+    return False
+
+
+def _last_word(text: str, words: tuple[str, ...]) -> int:
+    found = -1
+    for word in words:
+        for match in re.finditer(rf"\b{re.escape(word)}\b", text):
+            if match.start() > found:
+                found = match.start()
+    return found
+
+
+def _story_stops_pursuers(story: str, pursuers: list[str], leads: list[str]) -> bool:
+    """True when the brief itself stops or unhorses a pursuer, not the lead."""
+    if not story or not pursuers:
+        return False
+    for match in _STORY_ALLOWS_STOP.finditer(story):
+        before = story[: match.start()]
+        party = _nearer_party(before, pursuers, leads)
+        if party == "pursuer":
+            return True
+        if party == "lead":
+            continue
+        after = story[match.end() : match.end() + 48]
+        if _nearer_party(after, pursuers, leads) == "pursuer":
+            return True
+    return False
 
 
 def _nearer_party(before: str, pursuers: list[str], leads: list[str]) -> str:
@@ -1329,6 +1389,7 @@ def _ensure_lookback_motion(shots: list[Any], staging: StagingMap, style: str) -
             scene = staging.scenes[0]
         entities = {item.id: item for item in (scene.entities if scene else [])}
         sentence = ""
+        subject = "The rider"
         # stage.end is the action of this shot. stage.start is the previous
         # shot's exit, so a look-back that only opens the frame is not repeated.
         for block in stage.get("end") or []:
@@ -1338,19 +1399,22 @@ def _ensure_lookback_motion(shots: list[Any], staging: StagingMap, style: str) -
             travel = str(block.get("travel") or "")
             if not _looks_back(look, travel) or not _is_mounted_rider(block, entities, style):
                 continue
-            sentence = _capitalize_sentences(_twist_sentence(look, travel) + ".")
+            subject = _sentence_subject(_label(entities, str(block.get("id") or "")))
+            sentence = _capitalize_sentences(f"{subject} {_twist_sentence(look, travel)}.")
             break
         if not sentence:
             continue
-        motion = str(shot.get("prompt_motion") or "")
-        if "twists at the waist in the saddle" in motion.lower():
-            continue
-        shot["prompt_motion"] = f"{motion.rstrip().rstrip('.')}. {sentence}".strip()
+        motion = _subject_on_twist(str(shot.get("prompt_motion") or ""), subject)
+        if "twists at the waist in the saddle" not in motion.lower():
+            base = motion.rstrip()
+            motion = f"{base.rstrip('.')}. {sentence}".strip() if base else sentence
+        shot["prompt_motion"] = motion
 
 
 def _keep_pursuers_riding(shots: list[Any], staging: StagingMap, prompt: str) -> None:
     """Final-shot pursuers stay mounted unless the story says they stop."""
-    if _STORY_ALLOWS_STOP.search(prompt or ""):
+    pursuers, leads = _party_names(staging)
+    if _story_stops_pursuers(prompt or "", pursuers, leads):
         return
     scenes = {scene.id: scene for scene in staging.scenes}
     for shot in shots:
@@ -1404,6 +1468,28 @@ def _looks_back(look: str, travel: str) -> bool:
     if not look or look == travel or travel == "static":
         return False
     return _OPPOSITE_TRAVEL.get(travel) == look
+
+
+def _sentence_subject(label: str) -> str:
+    """Short rider name for a twist sentence: 'Jack on his horse' is 'Jack'."""
+    cleaned = " ".join(str(label or "").split()).strip()
+    if not cleaned:
+        return "The rider"
+    head = re.split(r"\s+on\s+", cleaned, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    subject = head or cleaned
+    if subject[:1].islower():
+        return subject[:1].upper() + subject[1:]
+    return subject
+
+
+def _subject_on_twist(motion: str, subject: str) -> str:
+    """Give a bare 'Twists at the waist...' sentence the rider as its subject."""
+    name = subject.strip() or "The rider"
+
+    def replacer(match: re.Match[str]) -> str:
+        return f"{match.group(1)}{name} twists at the waist in the saddle"
+
+    return _SUBJECTLESS_TWIST.sub(replacer, motion)
 
 
 def _twist_sentence(look: str, travel: str) -> str:
@@ -1596,11 +1682,23 @@ def _capitalize_sentences(text: str) -> str:
     return _SENTENCE_START.sub(lambda match: match.group(1) + match.group(2).upper(), text)
 
 
+def _capitalize_bullet(line: str) -> str:
+    """Bullet labels start with a capital: '- The bandit gang:'."""
+    if not line.startswith("- ") or len(line) < 3:
+        return line
+    body = line[2:]
+    if body[:1].isalpha() and body[:1].islower():
+        body = body[:1].upper() + body[1:]
+    return "- " + body
+
+
 def _polish_clause(text: str) -> str:
     polished: list[str] = []
     for line in text.split("\n"):
         if line.startswith("- "):
-            polished.append(_AFTER_PERIOD.sub(lambda match: match.group(1).upper(), line))
+            polished.append(
+                _AFTER_PERIOD.sub(lambda match: match.group(1).upper(), _capitalize_bullet(line))
+            )
         elif line == STAGING_HEADER:
             polished.append(line)
         else:
