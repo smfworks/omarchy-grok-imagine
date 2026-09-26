@@ -299,10 +299,10 @@
         ],
         "relations": [{ "a": "bandits", "rel": "behind", "b": "jack", "gap": "far" }]
       },
-      "prompt_still": "Wide desert. Jack rides away toward screen-right, small near the right edge, dusters still on the bandits halted on the left third.",
+      "prompt_still": "Wide desert. Jack rides away toward screen-right, small at the right edge, dusters still on the bandits halted on the left third.",
       "prompt_motion": "Jack rides on toward screen-right and grows smaller toward the right edge. The bandits stay halted on the left third. The camera holds static.",
       "start_state": "Close: Jack on the right third, torso twisted toward screen-left. Horse galloping screen-right. The bandits behind him on the left third.",
-      "end_state": "Wide: Jack small near the right edge riding screen-right. The bandits halted on the left third, far behind."
+      "end_state": "Wide: Jack small at the right edge riding screen-right. The bandits halted on the left third, far behind."
     }
   ]
 }
