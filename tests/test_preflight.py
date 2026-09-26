@@ -245,6 +245,131 @@ def test_lock_drift_warns_only_when_a_locked_anchor_changes() -> None:
     assert "lock_drift" not in _codes(clean["shots"][1])
 
 
+def test_explicitly_locked_palette_color_drifts_and_a_bare_palette_does_not() -> None:
+    body = pack_body()
+    body["look_bible"] = {
+        "cast": "Mara",
+        "wardrobe": "",
+        "palette": "sand, gold, the same crimson",
+        "lighting": "long shadows",
+        "camera": "",
+    }
+    body["shots"][0]["prompt_still"] = "Mara under long shadows, sand and crimson"
+    body["shots"][1]["prompt_still"] = "Mara under a gold sky"
+    report = preflight(PackIn.model_validate(body))
+    issue = next(item for item in report["shots"][1]["issues"] if item["code"] == "lock_drift")
+    assert "crimson" in issue["message"].lower()
+    for word in ("sand", "gold", "long", "shadows"):
+        assert word not in issue["message"].lower()
+
+
+def test_lock_drift_ignores_palette_words_unless_the_character_changes_color() -> None:
+    body = _chase_color_pack()
+    quiet = preflight(PackIn.model_validate(body))
+    assert "lock_drift" not in _codes(quiet["shots"][0])
+    # The bandits-only frame drops Cole's rust duster, long shadows, and the palette.
+    assert "lock_drift" not in _codes(quiet["shots"][1])
+
+    body["shots"][2]["prompt_still"] = "Cole in a blue duster rides on through an indigo sky."
+    drifted = preflight(PackIn.model_validate(body))
+    assert "lock_drift" not in _codes(drifted["shots"][1])
+    issue = next(item for item in drifted["shots"][2]["issues"] if item["code"] == "lock_drift")
+    assert issue["severity"] == "warn"
+    assert "rust" in issue["message"].lower()
+    for word in ("long", "shadows", "sand", "gold", "indigo", "amber"):
+        assert word not in issue["message"].lower()
+
+
+def _chase_color_pack() -> dict:
+    def block(entity: str, *, visible: bool) -> dict:
+        return {
+            "id": entity,
+            "x": "right_third" if entity == "cole" else "left_third",
+            "depth": "mid",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": visible,
+        }
+
+    scene = {
+        "id": "sc1",
+        "shot_ids": ["s01", "s02", "s03"],
+        "axis": "the trail",
+        "travel": "screen_right",
+        "entities": [
+            {"id": "cole", "label": "Cole", "kind": "character", "cast_id": "cole", "count": 1},
+            {"id": "bandits", "label": "the bandits", "kind": "group", "count": 3},
+        ],
+        "relations": [{"a": "bandits", "rel": "behind", "b": "cole", "gap": "far"}],
+    }
+
+    def shot(shot_id: str, still: str, end_state: str, start_state: str, blocks: list) -> dict:
+        return {
+            "id": shot_id,
+            "prompt_still": still,
+            "prompt_motion": "The horses gallop toward screen-right.",
+            "duration_sec": 8,
+            "start_state": start_state,
+            "end_state": end_state,
+            "stage": {
+                "scene_id": "sc1",
+                "camera_side": "same",
+                "start": blocks,
+                "end": blocks,
+                "relations": scene["relations"],
+            },
+        }
+
+    end_one = "Cole in a rust duster, bandits behind."
+    end_two = "Bandits only, Cole out of frame."
+    return {
+        "title": "Dust",
+        "style_preset": "chase",
+        "lock_staging": True,
+        "look_bible": {
+            "cast": "Cole, a lean cowboy",
+            "wardrobe": "Cole's rust duster",
+            "palette": "sand, rust, gold, indigo, amber",
+            "lighting": "long shadows",
+            "camera": "35mm",
+        },
+        "cast": [
+            {
+                "id": "cole",
+                "name": "Cole",
+                "role": "character",
+                "markers": "",
+                "image_path": "",
+            }
+        ],
+        "staging": {"scenes": [scene]},
+        "shots": [
+            shot(
+                "s01",
+                "Cole in a rust duster rides through long shadows. Sand, gold, and indigo.",
+                end_one,
+                "",
+                [block("cole", visible=True), block("bandits", visible=True)],
+            ),
+            shot(
+                "s02",
+                "The bandits ride through indigo dust. Amber and sand, long shadows gone.",
+                end_two,
+                end_one,
+                [block("cole", visible=False), block("bandits", visible=True)],
+            ),
+            shot(
+                "s03",
+                "Cole in a rust duster rides on. The sky is amber, not long shadows.",
+                "Cole rides on.",
+                end_two,
+                [block("cole", visible=True), block("bandits", visible=False)],
+            ),
+        ],
+    }
+
+
 def test_r2v_resolution_is_info_and_does_not_block() -> None:
     body = pack_body()
     body["shots"] = [body["shots"][0]]

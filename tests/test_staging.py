@@ -107,6 +107,8 @@ def test_staging_clause_locks_positions_and_forbids_riding_beside() -> None:
     assert "left-to-right" in still
     assert "same side of the line" in still
     assert "Jack on his buckskin horse" in still
+    assert "- Jack on his buckskin horse:" in still
+    assert "- The three bandits on dark horses:" in still
     assert "left edge of frame" in still
     assert "BEHIND" in still
     assert "Nobody rides beside" in still
@@ -397,7 +399,7 @@ def test_heuristic_chase_is_staged_without_a_network_call(
     ]
     climax = pack.shots[2]
     assert climax.stage is not None
-    assert "twists at the waist in the saddle" in climax.prompt_motion.lower()
+    assert "The cowboy twists at the waist in the saddle" in climax.prompt_motion
     assert "twists at the waist in the saddle" in report["shots"][2]["motion_prompt"].lower()
     button = pack.shots[-1]
     assert button.stage is not None
@@ -411,6 +413,77 @@ def test_heuristic_chase_is_staged_without_a_network_call(
     blob = json.dumps(pack.model_dump())
     assert "http://" not in blob
     assert "https://" not in blob
+
+
+def test_cowboy_chase_plan_has_no_lock_drift_until_a_wardrobe_color_changes() -> None:
+    """Palette words and 'long shadows' vary. A locked duster color does not."""
+    identity = "Cole in a rust duster and hat"
+    stills = [
+        f"{identity} rides through long shadows. Sand, gold, and indigo color the desert.",
+        f"{identity} keeps riding. Amber light replaces the long shadows.",
+        f"{identity} looks back. The sky is indigo and gold, without the long shadows.",
+        f"{identity} is small in the distance. Amber and sand sit on the horizon.",
+    ]
+    story = StoryDraft.model_validate(
+        {
+            "title": "Dust",
+            "logline": "A lone cowboy outruns bandits.",
+            "opening_state": "Cole is ahead of the bandits.",
+            "style_preset": "chase",
+            "look_bible": {
+                "cast": "Cole, a lean cowboy",
+                "wardrobe": "a rust duster and a wide hat",
+                "palette": "sand, rust, gold, indigo, amber",
+                "lighting": "long shadows",
+                "camera": "35mm, anamorphic flare, one grade",
+            },
+            "shots": [
+                {
+                    "prompt_still": still,
+                    "prompt_motion": "Cole rides toward screen-right.",
+                    "end_state": f"Cole still riding, picture {index}.",
+                    "beat": beat,
+                    "camera": {
+                        "scale": "wide",
+                        "angle": "eye",
+                        "move": "pan",
+                        "exit_frame": f"Cole still riding, picture {index}.",
+                    },
+                }
+                for index, (still, beat) in enumerate(
+                    zip(stills, ("setup", "turn", "climax", "button"), strict=True)
+                )
+            ],
+        }
+    )
+
+    class FakePlanner:
+        def plan_story(self, brief: object) -> StoryDraft:
+            return story
+
+    pack = plan_pack(
+        PlanIn(
+            prompt="A lone cowboy is chased across the desert by bandits.",
+            target_duration_sec=32,
+        ),
+        planner=FakePlanner(),
+    )
+    report = preflight(pack)
+    assert "lock_drift" not in _codes(report)
+
+    changed = pack.model_dump()
+    changed["shots"][2]["prompt_still"] = changed["shots"][2]["prompt_still"].replace(
+        "rust", "blue"
+    )
+    assert "rust" not in changed["shots"][2]["prompt_still"].lower()
+    drifted = preflight(PackIn.model_validate(changed))
+    assert "lock_drift" not in _codes({"shots": [drifted["shots"][0], drifted["shots"][1]]})
+    assert "lock_drift" not in {item["code"] for item in drifted["shots"][3]["issues"]}
+    issue = next(item for item in drifted["shots"][2]["issues"] if item["code"] == "lock_drift")
+    assert issue["severity"] == "warn"
+    assert "rust" in issue["message"].lower()
+    for word in ("long", "shadows", "sand", "gold", "indigo", "amber", "wide", "lean"):
+        assert word not in issue["message"].lower()
 
 
 def test_planner_parses_staging_and_copies_the_handoff() -> None:
@@ -696,6 +769,29 @@ def test_fall_back_is_rewritten_for_pursuers_and_not_the_lead() -> None:
     )
     assert kept == "The bandits have fallen back."
 
+    singular = normalize_pursuer_fall_back(
+        "A bandit falls back.",
+        ["a bandit", "bandit", "bandits"],
+        ["Cole"],
+    )
+    assert singular == "A bandit drops farther behind, still riding."
+
+    lead_stops = normalize_pursuer_fall_back(
+        "The bandits fall back.",
+        ["the bandits", "bandits"],
+        ["Cole"],
+        story="Cole halts at the ridge and is shot off his horse.",
+    )
+    assert lead_stops == "The bandits drop farther behind, still riding."
+
+    pursuer_stops = normalize_pursuer_fall_back(
+        "A bandit falls back.",
+        ["a bandit", "bandit", "bandits"],
+        ["Cole"],
+        story="A bandit halts and is shot off his horse.",
+    )
+    assert pursuer_stops == "A bandit falls back."
+
     story = StoryDraft.model_validate(
         {
             "title": "Dust",
@@ -781,6 +877,66 @@ def test_fall_back_is_rewritten_for_pursuers_and_not_the_lead() -> None:
     bandits = next(block for block in pack.shots[1].stage.end if block.id == "bandits")
     assert bandits.travel == "screen_right"
     assert pack.shots[1].start_state == pack.shots[0].end_state
+
+
+def test_clause_ahead_and_bullet_labels_are_grammatical() -> None:
+    scene = {
+        "id": "sc1",
+        "shot_ids": ["s01"],
+        "axis": "the trail",
+        "travel": "screen_right",
+        "entities": [
+            {"id": "cole", "label": "Cole", "kind": "character", "count": 1},
+            {"id": "gang", "label": "the bandit gang", "kind": "group", "count": 4},
+        ],
+        "relations": [{"a": "gang", "rel": "ahead", "b": "cole", "gap": "far"}],
+    }
+    pack = PackIn.model_validate(
+        {
+            "title": "Cole",
+            "style_preset": "chase",
+            "lock_staging": True,
+            "staging": {"scenes": [scene]},
+            "shots": [
+                {
+                    "id": "s01",
+                    "prompt_still": "Cole rides.",
+                    "prompt_motion": "Cole rides toward screen-right.",
+                    "stage": {
+                        "scene_id": "sc1",
+                        "camera_side": "same",
+                        "start": [
+                            _block("cole", "left_third"),
+                            _block("gang", "right_third"),
+                        ],
+                        "end": [
+                            _block("cole", "left_third"),
+                            _block("gang", "right_third"),
+                        ],
+                        "relations": scene["relations"],
+                    },
+                }
+            ],
+        }
+    )
+    clause = staging_clause(pack, pack.shots[0], "still")
+    assert "- The bandit gang:" in clause
+    assert "ahead of Cole" in clause
+    assert "ahead Cole" not in clause
+
+
+def test_lookback_motion_sentence_names_the_rider() -> None:
+    body = _load()
+    body["shots"][2]["prompt_motion"] = "Jack rides toward screen-right. The camera dollies in."
+    apply_staging(
+        body,
+        style="chase",
+        prompt="A lone cowboy outruns three bandits.",
+        supplied=body["staging"],
+    )
+    motion = body["shots"][2]["prompt_motion"]
+    assert "Jack twists at the waist in the saddle" in motion
+    assert "Twists at the waist" not in motion
 
 
 def test_a_riders_own_mount_is_not_a_separate_beside_relation() -> None:

@@ -149,7 +149,7 @@ Issues use `block`, `warn`, or `info`:
 | `camera_conflict` | warn | The motion text and `camera.move` name opposing moves (push against pull, a reversed screen direction, or a move the card does not match) |
 | `banned_cut` | warn | Editorial cut language such as `cut to`, `smash cut`, `dissolve`, or `[shot 2]` |
 | `handoff_state` | block | Shot N `start_state` is not shot N-1 `end_state` after strip |
-| `lock_drift` | warn | A look-bible or cast anchor in the still changes between consecutive shots |
+| `lock_drift` | warn | A locked name, wardrobe item, or explicitly locked color is missing from a later shot where that character appears |
 | `r2v_resolution` | info | A `1080p` pack will send `reference_to_video` at `720p` |
 | `side_flip` | block | An entity switches screen side, or `camera_side` is `cross`, without `cross_reason` |
 | `travel_flip` | block | Travel reverses (screen-left against screen-right) without `cross_reason` |
