@@ -192,9 +192,10 @@ def test_last_frame_seed_and_ffmpeg_stitch(client, app, monkeypatch, tmp_path) -
     assert edit["json"]["image"]["url"].startswith("data:image/")
     assert "Locked start state:" in edit["json"]["prompt"]
     assert "same face" in edit["json"]["prompt"]
-    assert "Only pose, blocking, and action may change" in edit["json"]["prompt"]
+    assert "Only pose and action may change" in edit["json"]["prompt"]
+    assert "same side of frame" in edit["json"]["prompt"]
     opening = next(item for item in bodies if item["path"].endswith("/images/generations"))
-    assert "Only pose, blocking, and action may change" not in opening["json"]["prompt"]
+    assert "Only pose and action may change" not in opening["json"]["prompt"]
     videos = [item for item in bodies if item["path"].endswith("/videos/generations")]
     assert videos[0]["json"]["model"] == "grok-imagine-video-1.5"
     assert videos[0]["json"]["image"]["url"].startswith("data:image/png;base64,")

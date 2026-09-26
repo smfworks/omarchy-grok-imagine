@@ -25,7 +25,7 @@ BIBLE_HEADER = "Look bible (locked across every shot):"
 _BIBLE_LABELS = ("Cast", "Wardrobe", "Palette", "Lighting", "Camera")
 
 BEAT_ROLES = ("setup", "turn", "climax", "button")
-STYLE_PRESETS = ("generic", "action_duel", "quiet_drama", "trek")
+STYLE_PRESETS = ("generic", "action_duel", "quiet_drama", "trek", "chase")
 CAMERA_SCALES = ("wide", "medium", "close", "extreme_close")
 CAMERA_ANGLES = ("eye", "low", "high", "ots", "dutch")
 CAMERA_MOVES = (
@@ -64,6 +64,41 @@ _MOVE_ALIASES = {
     "whip": "whip_pan",
     "hand_held": "handheld",
 }
+
+# Screen position, left to right. Depth is near to far. Travel may be static
+# while facing and look point somewhere else (a torso twist, not a reversal).
+SCREEN_X = (
+    "offscreen_left",
+    "left_edge",
+    "left_third",
+    "center",
+    "right_third",
+    "right_edge",
+    "offscreen_right",
+)
+DEPTHS = ("foreground", "mid", "background", "far")
+FACINGS = ("screen_left", "screen_right", "toward_camera", "away_from_camera")
+TRAVELS = (*FACINGS, "static")
+CAMERA_SIDES = ("same", "on_axis", "cross")
+ENTITY_KINDS = ("character", "group", "prop", "location")
+STAGE_RELATIONS = ("behind", "ahead", "beside", "facing", "surrounding")
+STAGE_GAPS = ("touching", "near", "mid", "far")
+
+_X_ALIASES = {
+    "left": "left_third",
+    "right": "right_third",
+    "middle": "center",
+    "centre": "center",
+}
+_DEPTH_ALIASES = {
+    "midground": "mid",
+    "mid_ground": "mid",
+    "near": "foreground",
+    "close": "foreground",
+}
+_KIND_ALIASES = {"people": "group", "person": "character", "crowd": "group"}
+_SIDE_ALIASES = {"axis": "on_axis", "onaxis": "on_axis"}
+_REL_ALIASES = {"back": "behind", "trailing": "behind", "front": "ahead"}
 
 
 def coerce_token(
@@ -237,6 +272,211 @@ def _relative_data_path(value: str, name: str) -> str:
     return cleaned
 
 
+class StageBlock(BaseModel):
+    """Where one entity is at a shot boundary. ``look`` is the eyeline, not travel."""
+
+    id: str
+    x: str
+    depth: str
+    facing: str
+    travel: str
+    visible: bool = True
+    look: str = ""
+
+    @field_validator("id")
+    @classmethod
+    def block_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not _SHOT_ID.fullmatch(cleaned):
+            raise ValueError("id must be a filename-safe token (letters, numbers, _, -)")
+        return cleaned
+
+    @field_validator("x")
+    @classmethod
+    def x_value(cls, value: str) -> str:
+        return coerce_token(value, SCREEN_X, _X_ALIASES, "x", allow_empty=False)
+
+    @field_validator("depth")
+    @classmethod
+    def depth_value(cls, value: str) -> str:
+        return coerce_token(value, DEPTHS, _DEPTH_ALIASES, "depth", allow_empty=False)
+
+    @field_validator("facing")
+    @classmethod
+    def facing_value(cls, value: str) -> str:
+        return coerce_token(value, FACINGS, {}, "facing", allow_empty=False)
+
+    @field_validator("look")
+    @classmethod
+    def look_value(cls, value: str) -> str:
+        return coerce_token(value, FACINGS, {}, "look", allow_empty=True)
+
+    @field_validator("travel")
+    @classmethod
+    def travel_value(cls, value: str) -> str:
+        return coerce_token(value, TRAVELS, {}, "travel", allow_empty=False)
+
+
+class StageRelation(BaseModel):
+    """A spatial relation. Scene relations are the default; a shot may override them."""
+
+    a: str
+    rel: str
+    b: str
+    gap: str = ""
+
+    @field_validator("a", "b")
+    @classmethod
+    def party_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not _SHOT_ID.fullmatch(cleaned):
+            raise ValueError("relation ids must be filename-safe tokens")
+        return cleaned
+
+    @field_validator("rel")
+    @classmethod
+    def rel_value(cls, value: str) -> str:
+        return coerce_token(value, STAGE_RELATIONS, _REL_ALIASES, "rel", allow_empty=False)
+
+    @field_validator("gap")
+    @classmethod
+    def gap_value(cls, value: str) -> str:
+        return coerce_token(value, STAGE_GAPS, {}, "gap", allow_empty=True)
+
+
+class StageEntity(BaseModel):
+    """One figure or group on the scene stage map. ``cast_id`` may be empty."""
+
+    id: str
+    label: str
+    kind: str = "character"
+    cast_id: str = ""
+    count: int = 1
+
+    @field_validator("id")
+    @classmethod
+    def entity_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not _SHOT_ID.fullmatch(cleaned):
+            raise ValueError("id must be a filename-safe token (letters, numbers, _, -)")
+        return cleaned
+
+    @field_validator("label")
+    @classmethod
+    def entity_label(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("label must not be empty")
+        if len(cleaned) > 160:
+            raise ValueError("label must be at most 160 characters")
+        return cleaned
+
+    @field_validator("kind")
+    @classmethod
+    def kind_value(cls, value: str) -> str:
+        return coerce_token(value, ENTITY_KINDS, _KIND_ALIASES, "kind", allow_empty=False)
+
+    @field_validator("cast_id")
+    @classmethod
+    def cast_link(cls, value: str) -> str:
+        cleaned = value.strip()
+        if cleaned and not _SHOT_ID.fullmatch(cleaned):
+            raise ValueError("cast_id must be a filename-safe token")
+        return cleaned
+
+    @field_validator("count")
+    @classmethod
+    def count_value(cls, value: int) -> int:
+        if value < 1 or value > 24:
+            raise ValueError("count must be between 1 and 24")
+        return value
+
+
+class StagingScene(BaseModel):
+    """Axis, travel, and default relations for one run of shots."""
+
+    id: str
+    shot_ids: list[str] = Field(default_factory=list)
+    axis: str = ""
+    travel: str = ""
+    entities: list[StageEntity] = Field(default_factory=list)
+    relations: list[StageRelation] = Field(default_factory=list)
+
+    @field_validator("id")
+    @classmethod
+    def scene_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not _SHOT_ID.fullmatch(cleaned):
+            raise ValueError("id must be a filename-safe token (letters, numbers, _, -)")
+        return cleaned
+
+    @field_validator("shot_ids")
+    @classmethod
+    def shot_id_list(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item.strip()]
+        for item in cleaned:
+            if not _SHOT_ID.fullmatch(item):
+                raise ValueError("shot_ids must be filename-safe tokens")
+        return cleaned
+
+    @field_validator("axis")
+    @classmethod
+    def axis_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("travel")
+    @classmethod
+    def scene_travel(cls, value: str) -> str:
+        return coerce_token(value, TRAVELS, {}, "travel", allow_empty=True)
+
+
+class StagingMap(BaseModel):
+    """Pack-level stage map. Empty when a pack has no blocking."""
+
+    scenes: list[StagingScene] = Field(default_factory=list)
+
+
+class ShotStage(BaseModel):
+    """Blocking at the first and last frame. ``cross_reason`` is required to change sides.
+
+    ``cross_motivation`` is accepted as an alias for ``cross_reason``.
+    """
+
+    scene_id: str = ""
+    camera_side: str = ""
+    cross_reason: str = ""
+    start: list[StageBlock] = Field(default_factory=list)
+    end: list[StageBlock] = Field(default_factory=list)
+    relations: list[StageRelation] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def motivation_alias(cls, value: object) -> object:
+        if isinstance(value, dict) and "cross_reason" not in value and "cross_motivation" in value:
+            merged = dict(value)
+            merged["cross_reason"] = merged.pop("cross_motivation")
+            return merged
+        return value
+
+    @field_validator("scene_id")
+    @classmethod
+    def scene_link(cls, value: str) -> str:
+        cleaned = value.strip()
+        if cleaned and not _SHOT_ID.fullmatch(cleaned):
+            raise ValueError("scene_id must be a filename-safe token")
+        return cleaned
+
+    @field_validator("camera_side")
+    @classmethod
+    def side_value(cls, value: str) -> str:
+        return coerce_token(value, CAMERA_SIDES, _SIDE_ALIASES, "camera_side", allow_empty=True)
+
+    @field_validator("cross_reason")
+    @classmethod
+    def reason_text(cls, value: str) -> str:
+        return value.strip()
+
+
 class Shot(BaseModel):
     id: str
     prompt_still: str
@@ -246,6 +486,7 @@ class Shot(BaseModel):
     start_state: str = ""
     beat: str = ""
     camera: CameraCard = Field(default_factory=CameraCard)
+    stage: ShotStage | None = None
     video_mode: str = "image_to_video"
     dialogue: str = ""
     voice_id: str = ""
@@ -318,6 +559,8 @@ class PackIn(BaseModel):
     style_preset: str = ""
     beat_map: list[StoryBeat] = Field(default_factory=list)
     cast: list[CastRef] = Field(default_factory=list)
+    staging: StagingMap | None = None
+    lock_staging: bool = True
     music_path: str = ""
     shots: list[Shot] = Field(min_length=1)
 

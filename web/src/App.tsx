@@ -53,6 +53,7 @@ function emptyShot(id: string, startState = ""): ShotDraft {
     start_state: startState,
     beat: "",
     camera: emptyCamera(),
+    stage: null,
     video_mode: "image_to_video",
     dialogue: "",
     voice_id: "",
@@ -153,6 +154,8 @@ function payload(pack: PackDraft): PackDraft {
       markers: item.markers.trim(),
       image_path: item.image_path,
     })),
+    staging: pack.staging,
+    lock_staging: pack.lock_staging,
     music_path: pack.music_path.trim(),
     shots: pack.shots.map((shot) => ({
       id: shot.id.trim(),
@@ -168,11 +171,85 @@ function payload(pack: PackDraft): PackDraft {
         move: shot.camera.move.trim(),
         exit_frame: shot.camera.exit_frame.trim(),
       },
+      stage: shot.stage,
       video_mode: shot.video_mode || "image_to_video",
       dialogue: shot.dialogue.trim(),
       voice_id: shot.video_mode === "reference_to_video" ? shot.voice_id.trim() : "",
     })),
   };
+}
+
+const STAGE_X: Record<string, number> = {
+  offscreen_left: 8,
+  left_edge: 18,
+  left_third: 30,
+  center: 50,
+  right_third: 70,
+  right_edge: 82,
+  offscreen_right: 92,
+};
+
+const STAGE_DEPTH: Record<string, number> = {
+  far: 24,
+  background: 42,
+  mid: 60,
+  foreground: 80,
+};
+
+function travelMark(travel: string): string {
+  if (travel === "screen_left") {
+    return "←";
+  }
+  if (travel === "screen_right") {
+    return "→";
+  }
+  if (travel === "toward_camera") {
+    return "◎";
+  }
+  if (travel === "away_from_camera") {
+    return "↑";
+  }
+  return "•";
+}
+
+function StageStrip({ pack, shot }: { pack: PackDraft; shot: ShotDraft }) {
+  const stage = shot.stage;
+  const blocks = stage?.end.length ? stage.end : (stage?.start ?? []);
+  if (!stage || blocks.length === 0) {
+    return null;
+  }
+  const scene =
+    pack.staging?.scenes.find(
+      (item) => item.id === stage.scene_id || item.shot_ids.includes(shot.id),
+    ) ?? pack.staging?.scenes[0];
+  const labels = new Map((scene?.entities ?? []).map((entity) => [entity.id, entity.label]));
+  const travel =
+    scene?.travel ||
+    blocks.find((block) => block.travel && block.travel !== "static")?.travel ||
+    "static";
+  return (
+    <div className="stage-strip" data-testid={`stage-strip-${shot.id}`}>
+      <div className="stage-axis" />
+      <span className="stage-arrow" aria-hidden="true">
+        {travelMark(travel)}
+      </span>
+      {blocks
+        .filter((block) => block.visible)
+        .map((block) => (
+          <span
+            key={block.id}
+            className="stage-dot"
+            style={{
+              left: `${STAGE_X[block.x] ?? 50}%`,
+              top: `${STAGE_DEPTH[block.depth] ?? 58}%`,
+            }}
+            title={labels.get(block.id) || block.id}
+          >
+            <span className="stage-name">{labels.get(block.id) || block.id}</span>
+          </span>
+        ))}
+    </div>
+  );
 }
 
 function CastThumb({ item, preview }: { item: CastRef; preview?: string }) {
@@ -220,6 +297,8 @@ export function App() {
     style_preset: "",
     beat_map: [],
     cast: [],
+    staging: null,
+    lock_staging: true,
     music_path: "",
     shots: [emptyShot("s01")],
   });
@@ -380,11 +459,14 @@ export function App() {
       })),
       look_bible: { ...emptyLookBible(), ...(pack.look_bible ?? {}) },
       cast: pack.cast ?? [],
+      staging: pack.staging ?? null,
+      lock_staging: pack.lock_staging !== false,
       music_path: pack.music_path ?? "",
       shots: pack.shots.map((shot) => ({
         ...emptyShot(shot.id),
         ...shot,
         camera: { ...emptyCamera(), ...(shot.camera ?? {}) },
+        stage: shot.stage ?? null,
       })),
     };
   }
@@ -424,6 +506,8 @@ export function App() {
         ...(title ? { title } : {}),
         ...(briefStyle ? { style_preset: briefStyle } : {}),
         ...(draft.cast.length ? { cast: draft.cast } : {}),
+        ...(draft.staging ? { staging: draft.staging } : {}),
+        lock_staging: draft.lock_staging,
         ...(draft.music_path ? { music_path: draft.music_path } : {}),
       });
       setDraft(adoptPack(filled));
@@ -970,6 +1054,15 @@ export function App() {
       {showEditor ? (
       <section className="panel">
         <h2>Shots</h2>
+        <label className="lock-staging">
+          <input
+            type="checkbox"
+            data-testid="lock-staging"
+            checked={draft.lock_staging}
+            onChange={(event) => setDraft({ ...draft, lock_staging: event.target.checked })}
+          />
+          Lock staging
+        </label>
         <p className="note">
           When both are set, a shot&apos;s start state must match the previous shot&apos;s end state.
           Duration is 1–15 seconds. Default is 8.
@@ -1002,6 +1095,7 @@ export function App() {
               <span className="chip">{tokenLabel(shot.camera.angle)}</span>
               <span className="chip">{tokenLabel(shot.camera.move)}</span>
             </p>
+            <StageStrip pack={draft} shot={shot} />
             <div className="grid">
               <label className="field">
                 <span>Beat</span>

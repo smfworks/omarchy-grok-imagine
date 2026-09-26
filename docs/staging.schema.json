@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omarchy.local/staging.schema.json",
+  "title": "Omarchy shot-pack staging",
+  "description": "Scene stage map and per-shot blocking. Both are optional. A pack without them still loads. cross_motivation is an input alias of cross_reason.",
+  "type": "object",
+  "properties": {
+    "lock_staging": { "type": "boolean", "default": true },
+    "staging": {
+      "type": ["object", "null"],
+      "properties": {
+        "scenes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/scene" }
+        }
+      },
+      "required": ["scenes"]
+    }
+  },
+  "$defs": {
+    "scene": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "shot_ids": { "type": "array", "items": { "type": "string" } },
+        "axis": { "type": "string" },
+        "travel": { "enum": ["", "screen_left", "screen_right", "toward_camera", "away_from_camera", "static"] },
+        "entities": { "type": "array", "items": { "$ref": "#/$defs/entity" } },
+        "relations": { "type": "array", "items": { "$ref": "#/$defs/relation" } }
+      },
+      "required": ["id", "entities"]
+    },
+    "entity": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "kind": { "enum": ["character", "group", "prop", "location"] },
+        "cast_id": { "type": "string" },
+        "count": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["id", "label"]
+    },
+    "relation": {
+      "type": "object",
+      "properties": {
+        "a": { "type": "string" },
+        "rel": { "enum": ["behind", "ahead", "beside", "facing", "surrounding"] },
+        "b": { "type": "string" },
+        "gap": { "enum": ["", "touching", "near", "mid", "far"] }
+      },
+      "required": ["a", "rel", "b"]
+    },
+    "block": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "x": {
+          "enum": [
+            "offscreen_left",
+            "left_edge",
+            "left_third",
+            "center",
+            "right_third",
+            "right_edge",
+            "offscreen_right"
+          ]
+        },
+        "depth": { "enum": ["foreground", "mid", "background", "far"] },
+        "facing": { "enum": ["screen_left", "screen_right", "toward_camera", "away_from_camera"] },
+        "look": { "enum": ["", "screen_left", "screen_right", "toward_camera", "away_from_camera"] },
+        "travel": {
+          "enum": ["screen_left", "screen_right", "toward_camera", "away_from_camera", "static"]
+        },
+        "visible": { "type": "boolean" }
+      },
+      "required": ["id", "x", "depth", "facing", "travel"]
+    },
+    "stage": {
+      "type": "object",
+      "description": "Per-shot blocking. cross_reason is required when camera_side is cross or an entity changes screen side.",
+      "properties": {
+        "scene_id": { "type": "string" },
+        "camera_side": { "enum": ["", "same", "on_axis", "cross"] },
+        "cross_reason": { "type": "string" },
+        "start": { "type": "array", "items": { "$ref": "#/$defs/block" } },
+        "end": { "type": "array", "items": { "$ref": "#/$defs/block" } },
+        "relations": { "type": "array", "items": { "$ref": "#/$defs/relation" } }
+      }
+    }
+  }
+}

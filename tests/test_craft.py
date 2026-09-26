@@ -127,10 +127,13 @@ def test_action_duel_uses_dutch_once_and_stays_bloodless() -> None:
     dutch = [shot for shot in pack.shots if shot.camera.angle == "dutch"]
     assert len(dutch) == 1
     assert dutch[0].beat == "climax"
-    assert dutch[0].camera.move == "whip_pan"
+    assert dutch[0].camera.move == "dolly_in"
     assert "whip" not in dutch[0].prompt_still.lower()
-    assert "whip-pans" in dutch[0].prompt_motion
+    assert "dollies in" in dutch[0].prompt_motion
+    assert "orbits" not in dutch[0].prompt_motion
     blob = json.dumps(pack.model_dump()).lower()
+    assert "meets the other figure" not in blob
+    assert "duel line" not in blob
     assert "bloody" not in blob
     assert "death" not in blob
     assert "kills" not in blob

@@ -20,6 +20,7 @@ from omarchy_imagine.config import MAX_REFERENCE_IMAGES, reference_video_resolut
 from omarchy_imagine.ffmpeg_util import ffmpeg_path
 from omarchy_imagine.pipeline import build_motion_prompt, build_still_prompt
 from omarchy_imagine.schema import PackIn, render_look_bible
+from omarchy_imagine.staging import check_staging
 
 Severity = Literal["block", "warn", "info"]
 
@@ -274,6 +275,7 @@ def preflight(pack: PackIn) -> dict[str, Any]:
             look_bible=bible,
             cast=cast,
             image_note=image_note,
+            pack=pack,
         )
         if seeded:
             still_prompt = f"{still_prompt}\n\n{SEED_FRAME_NOTE}"
@@ -282,6 +284,7 @@ def preflight(pack: PackIn) -> dict[str, Any]:
             look_bible=bible,
             cast=cast,
             reference_note=reference_note,
+            pack=pack,
         )
         issues = _shot_issues(pack, index, anchors)
         shots.append(
@@ -293,6 +296,12 @@ def preflight(pack: PackIn) -> dict[str, Any]:
                 video_mode=shot.video_mode,
                 issues=issues,
             )
+        )
+    stills = [shot.still_prompt for shot in shots]
+    motions = [shot.motion_prompt for shot in shots]
+    for item in check_staging(pack, still_prompts=stills, motion_prompts=motions):
+        shots[item.shot_index].issues.append(
+            PreflightIssue(code=item.code, severity=item.severity, message=item.message)
         )
     blocking = any(issue.severity == "block" for shot in shots for issue in shot.issues)
     report = PreflightOut(
@@ -404,8 +413,15 @@ def _camera_conflict(motion: str, move: str, shot_id: str) -> PreflightIssue | N
     if card:
         combined.add(card)
     text = motion.lower()
-    reverses = ("left-to-right" in text and "right-to-left" in text) or (
-        "camera-left" in text and "camera-right" in text
+    # A look, aim, or twist toward the other side is not a travel reversal.
+    travel_text = re.sub(
+        r"[^.]*\b(?:looks?|looking|aims?|aiming|twists?|twisting|faces?|facing|glances?)\b[^.]*",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    reverses = ("left-to-right" in travel_text and "right-to-left" in travel_text) or (
+        "camera-left" in travel_text and "camera-right" in travel_text
     )
     tilts_both = bool(re.search(r"\btilt(?:s|ing)? up\b", text)) and bool(
         re.search(r"\btilt(?:s|ing)? down\b", text)

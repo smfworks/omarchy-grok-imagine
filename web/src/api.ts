@@ -1,4 +1,4 @@
-import type { CastRef, Health, Job, PackDraft, PreflightResult } from "./types";
+import type { CastRef, Health, Job, PackDraft, PreflightResult, StagingMap } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8010";
 const TOKEN = import.meta.env.VITE_API_TOKEN || "local-dev-token";
@@ -71,6 +71,8 @@ export type PlanRequest = {
   title?: string;
   style_preset?: string;
   cast?: CastRef[];
+  staging?: StagingMap | null;
+  lock_staging?: boolean;
   music_path?: string;
 };
 

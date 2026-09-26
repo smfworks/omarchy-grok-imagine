@@ -1,0 +1,308 @@
+{
+  "title": "Dust at Sundown",
+  "logline": "A lone cowboy outruns three bandits across the desert at sunset.",
+  "aspect_ratio": "16:9",
+  "resolution": "720p",
+  "style_preset": "chase",
+  "lock_staging": true,
+  "look_bible": {
+    "cast": "Jack",
+    "wardrobe": "dusters",
+    "palette": "",
+    "lighting": "",
+    "camera": ""
+  },
+  "cast": [
+    {
+      "id": "jack",
+      "name": "Jack",
+      "role": "character",
+      "markers": "",
+      "image_path": ""
+    },
+    {
+      "id": "bandits",
+      "name": "bandits",
+      "role": "character",
+      "markers": "",
+      "image_path": ""
+    }
+  ],
+  "staging": {
+    "scenes": [
+      {
+        "id": "sc1",
+        "shot_ids": ["s01", "s02", "s03", "s04"],
+        "axis": "the chase runs along the trail and the camera stays on the sun side",
+        "travel": "screen_right",
+        "entities": [
+          {
+            "id": "jack",
+            "label": "Jack on his buckskin horse",
+            "kind": "character",
+            "cast_id": "jack",
+            "count": 1
+          },
+          {
+            "id": "bandits",
+            "label": "the three bandits on dark horses",
+            "kind": "group",
+            "cast_id": "bandits",
+            "count": 3
+          }
+        ],
+        "relations": [{ "a": "bandits", "rel": "behind", "b": "jack", "gap": "far" }]
+      }
+    ]
+  },
+  "shots": [
+    {
+      "id": "s01",
+      "duration_sec": 8,
+      "beat": "setup",
+      "video_mode": "image_to_video",
+      "camera": {
+        "scale": "wide",
+        "angle": "eye",
+        "move": "pan",
+        "exit_frame": "Jack at the right third, bandits far behind on the left third."
+      },
+      "stage": {
+        "scene_id": "sc1",
+        "camera_side": "same",
+        "cross_reason": "",
+        "start": [
+          {
+            "id": "jack",
+            "x": "center",
+            "depth": "mid",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          },
+          {
+            "id": "bandits",
+            "x": "left_edge",
+            "depth": "far",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          }
+        ],
+        "end": [
+          {
+            "id": "jack",
+            "x": "right_third",
+            "depth": "mid",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          },
+          {
+            "id": "bandits",
+            "x": "left_third",
+            "depth": "far",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          }
+        ],
+        "relations": [{ "a": "bandits", "rel": "behind", "b": "jack", "gap": "far" }]
+      },
+      "prompt_still": "Wide eye-level profile of Jack galloping toward screen-right, center of frame. Far behind him at the left edge, three bandits in dusters ride the same way.",
+      "prompt_motion": "Jack gallops toward screen-right and drifts to the right third. The bandits stay far behind on the left third. The camera pans.",
+      "start_state": "Wide profile: Jack galloping screen-right at center. Three bandits far behind at the left edge.",
+      "end_state": "Wide profile: Jack at the right third galloping screen-right. The bandits far behind on the left third."
+    },
+    {
+      "id": "s02",
+      "duration_sec": 8,
+      "beat": "turn",
+      "video_mode": "image_to_video",
+      "camera": {
+        "scale": "medium",
+        "angle": "low",
+        "move": "pan",
+        "exit_frame": "Jack at the right third. Bandits closer behind on the left third."
+      },
+      "stage": {
+        "scene_id": "sc1",
+        "camera_side": "same",
+        "cross_reason": "",
+        "start": [
+          {
+            "id": "jack",
+            "x": "right_third",
+            "depth": "mid",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          },
+          {
+            "id": "bandits",
+            "x": "left_third",
+            "depth": "far",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          }
+        ],
+        "end": [
+          {
+            "id": "jack",
+            "x": "right_third",
+            "depth": "mid",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          },
+          {
+            "id": "bandits",
+            "x": "left_third",
+            "depth": "background",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          }
+        ],
+        "relations": [{ "a": "bandits", "rel": "behind", "b": "jack", "gap": "mid" }]
+      },
+      "prompt_still": "Medium low-angle profile of Jack on the right third, riding toward screen-right, dusters on the bandits in the background on the left third, still behind him.",
+      "prompt_motion": "The bandits close from far to background on the left third. Jack keeps riding toward screen-right. The camera pans.",
+      "start_state": "Wide profile: Jack at the right third galloping screen-right. The bandits far behind on the left third.",
+      "end_state": "Medium profile: Jack at the right third riding screen-right. The bandits in the background on the left third, still behind him."
+    },
+    {
+      "id": "s03",
+      "duration_sec": 8,
+      "beat": "climax",
+      "video_mode": "image_to_video",
+      "camera": {
+        "scale": "close",
+        "angle": "eye",
+        "move": "dolly_in",
+        "exit_frame": "Jack twisted toward screen-left. Bandits behind on the left third."
+      },
+      "stage": {
+        "scene_id": "sc1",
+        "camera_side": "same",
+        "cross_reason": "",
+        "start": [
+          {
+            "id": "jack",
+            "x": "right_third",
+            "depth": "mid",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          },
+          {
+            "id": "bandits",
+            "x": "left_third",
+            "depth": "background",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          }
+        ],
+        "end": [
+          {
+            "id": "jack",
+            "x": "right_third",
+            "depth": "foreground",
+            "facing": "screen_right",
+            "look": "screen_left",
+            "travel": "screen_right",
+            "visible": true
+          },
+          {
+            "id": "bandits",
+            "x": "left_third",
+            "depth": "background",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          }
+        ],
+        "relations": [{ "a": "bandits", "rel": "behind", "b": "jack", "gap": "mid" }]
+      },
+      "prompt_still": "Close shot of Jack on the right third, horse galloping toward screen-right. He twists his torso back toward screen-left. The bandits ride soft-focus in dusters on the left third, behind him.",
+      "prompt_motion": "Jack twists in the saddle toward screen-left and raises one warning shot into the air. His horse keeps galloping toward screen-right. The bandits stay behind on the left. The camera dollies in.",
+      "start_state": "Medium profile: Jack at the right third riding screen-right. The bandits in the background on the left third, still behind him.",
+      "end_state": "Close: Jack on the right third, torso twisted toward screen-left. Horse galloping screen-right. The bandits behind him on the left third."
+    },
+    {
+      "id": "s04",
+      "duration_sec": 8,
+      "beat": "button",
+      "video_mode": "image_to_video",
+      "camera": {
+        "scale": "wide",
+        "angle": "eye",
+        "move": "static",
+        "exit_frame": "Jack small at the right edge. Bandits halted on the left third."
+      },
+      "stage": {
+        "scene_id": "sc1",
+        "camera_side": "same",
+        "cross_reason": "",
+        "start": [
+          {
+            "id": "jack",
+            "x": "right_third",
+            "depth": "foreground",
+            "facing": "screen_right",
+            "look": "screen_left",
+            "travel": "screen_right",
+            "visible": true
+          },
+          {
+            "id": "bandits",
+            "x": "left_third",
+            "depth": "background",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          }
+        ],
+        "end": [
+          {
+            "id": "jack",
+            "x": "right_edge",
+            "depth": "background",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "screen_right",
+            "visible": true
+          },
+          {
+            "id": "bandits",
+            "x": "left_third",
+            "depth": "mid",
+            "facing": "screen_right",
+            "look": "",
+            "travel": "static",
+            "visible": true
+          }
+        ],
+        "relations": [{ "a": "bandits", "rel": "behind", "b": "jack", "gap": "far" }]
+      },
+      "prompt_still": "Wide desert. Jack rides away toward screen-right, small at the right edge, dusters still on the bandits halted on the left third.",
+      "prompt_motion": "Jack rides on toward screen-right and grows smaller toward the right edge. The bandits stay halted on the left third. The camera holds static.",
+      "start_state": "Close: Jack on the right third, torso twisted toward screen-left. Horse galloping screen-right. The bandits behind him on the left third.",
+      "end_state": "Wide: Jack small at the right edge riding screen-right. The bandits halted on the left third, far behind."
+    }
+  ]
+}
