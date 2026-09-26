@@ -263,6 +263,7 @@ def preflight(pack: PackIn) -> dict[str, Any]:
     cast = [item.model_dump() for item in pack.cast]
     anchors = _anchor_words(pack)
     shots: list[PreflightShot] = []
+    previous_still = ""
     for index, shot in enumerate(pack.shots):
         seeded, mode, image_note = _still_plan(index, cast, ffmpeg_ready)
         shot_dict = shot.model_dump()
@@ -286,7 +287,8 @@ def preflight(pack: PackIn) -> dict[str, Any]:
             reference_note=reference_note,
             pack=pack,
         )
-        issues = _shot_issues(pack, index, anchors)
+        issues = _shot_issues(pack, index, anchors, previous_still)
+        previous_still = shot.prompt_still
         shots.append(
             PreflightShot(
                 id=shot.id,
@@ -335,7 +337,12 @@ def _still_plan(
     return False, "text_to_image", ""
 
 
-def _shot_issues(pack: PackIn, index: int, anchors: list[str]) -> list[PreflightIssue]:
+def _shot_issues(
+    pack: PackIn,
+    index: int,
+    anchors: list[str],
+    previous_still: str,
+) -> list[PreflightIssue]:
     shot = pack.shots[index]
     issues: list[PreflightIssue] = []
     if index > 0:
@@ -378,21 +385,28 @@ def _shot_issues(pack: PackIn, index: int, anchors: list[str]) -> list[Preflight
                 ),
             )
         )
-    missing = [word for word in anchors if not _contains_word(shot.prompt_still, word)]
-    if missing:
-        shown = missing[:6]
-        extra = len(missing) - len(shown)
-        suffix = f" and {extra} more" if extra else ""
-        issues.append(
-            PreflightIssue(
-                code="lock_drift",
-                severity="warn",
-                message=(
-                    f"Shot {shot.id} still prompt is missing look-bible or cast anchors: "
-                    f"{', '.join(shown)}{suffix}."
-                ),
+    # A lock that is absent from every still is not drift. Warn only when a
+    # locked word is in one shot and missing from the next.
+    if index > 0 and anchors:
+        drifted = [
+            word
+            for word in anchors
+            if _contains_word(previous_still, word) != _contains_word(shot.prompt_still, word)
+        ]
+        if drifted:
+            shown = drifted[:6]
+            extra = len(drifted) - len(shown)
+            suffix = f" and {extra} more" if extra else ""
+            issues.append(
+                PreflightIssue(
+                    code="lock_drift",
+                    severity="warn",
+                    message=(
+                        f"Shot {shot.id} still prompt changes locked look-bible or cast "
+                        f"anchors from the previous shot: {', '.join(shown)}{suffix}."
+                    ),
+                )
             )
-        )
     if pack.resolution == "1080p" and shot.video_mode == "reference_to_video":
         _sent, note = reference_video_resolution(pack.resolution)
         issues.append(

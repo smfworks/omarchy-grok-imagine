@@ -206,11 +206,11 @@ def test_handoff_state_blocks_when_states_differ_after_strip() -> None:
     assert paraphrase["blocking"] is True
 
 
-def test_lock_drift_warns_when_anchors_are_missing_from_the_still() -> None:
+def test_lock_drift_warns_only_when_a_locked_anchor_changes() -> None:
     body = pack_body()
     body["look_bible"] = {
         "cast": "Mara Voss",
-        "wardrobe": "",
+        "wardrobe": "red coat",
         "palette": "",
         "lighting": "",
         "camera": "",
@@ -224,14 +224,22 @@ def test_lock_drift_warns_when_anchors_are_missing_from_the_still() -> None:
             "image_path": "",
         }
     ]
-    report = preflight(PackIn.model_validate(body))
-    drift = next(item for item in report["shots"][0]["issues"] if item["code"] == "lock_drift")
-    assert drift["severity"] == "warn"
-    assert "Mara" in drift["message"]
-    assert "scarred" in drift["message"]
+    # The same anchors are missing from every still. That is not drift.
+    quiet = preflight(PackIn.model_validate(body))
+    assert "lock_drift" not in _codes(quiet["shots"][0])
+    assert "lock_drift" not in _codes(quiet["shots"][1])
+
+    body["shots"][0]["prompt_still"] = "Mara Voss in a red coat, scarred brow, on the dock"
+    body["shots"][1]["prompt_still"] = "The boat is in open water"
+    drifted = preflight(PackIn.model_validate(body))
+    assert "lock_drift" not in _codes(drifted["shots"][0])
+    issue = next(item for item in drifted["shots"][1]["issues"] if item["code"] == "lock_drift")
+    assert issue["severity"] == "warn"
+    assert "Mara" in issue["message"]
+    assert "scarred" in issue["message"]
 
     for shot in body["shots"]:
-        shot["prompt_still"] = "Mara Voss, scarred brow, stands on the dock"
+        shot["prompt_still"] = "Mara Voss, scarred brow, red coat, stands on the dock"
     clean = preflight(PackIn.model_validate(body))
     assert "lock_drift" not in _codes(clean["shots"][0])
     assert "lock_drift" not in _codes(clean["shots"][1])
