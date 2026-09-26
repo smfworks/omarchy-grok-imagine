@@ -279,6 +279,62 @@ button:disabled {
   margin: 0 0 12px;
 }
 
+.lock-staging {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--ink);
+}
+
+.stage-strip {
+  position: relative;
+  height: 96px;
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.stage-axis {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: 50%;
+  height: 1px;
+  background: var(--line);
+}
+
+.stage-arrow {
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+.stage-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  transform: translate(-50%, -50%);
+}
+
+.stage-name {
+  position: absolute;
+  left: 14px;
+  top: -6px;
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;

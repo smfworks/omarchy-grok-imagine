@@ -36,9 +36,12 @@ from omarchy_imagine.schema import (
     CastRef,
     LookBible,
     PackIn,
+    ShotStage,
+    StagingMap,
     StoryBeat,
     coerce_token,
 )
+from omarchy_imagine.staging import apply_staging
 
 MAX_SHOTS = 12
 DEFAULT_SHOT_COUNT = 2
@@ -60,6 +63,7 @@ class ShotFill(BaseModel):
     video_mode: str = "image_to_video"
     dialogue: str = ""
     voice_id: str = ""
+    stage: ShotStage | None = None
 
     @field_validator("id", "prompt_still", "prompt_motion", "end_state", "start_state")
     @classmethod
@@ -106,6 +110,8 @@ class FillIn(BaseModel):
     style_preset: str = ""
     beat_map: list[StoryBeat] = Field(default_factory=list)
     cast: list[CastRef] = Field(default_factory=list)
+    staging: StagingMap | None = None
+    lock_staging: bool = True
     music_path: str = ""
     shots: list[ShotFill] | None = None
 
@@ -184,9 +190,17 @@ def fill_pack(body: FillIn) -> PackIn:
         "style_preset": body.style_preset,
         "beat_map": [item.model_dump() for item in body.beat_map],
         "cast": cast,
+        "staging": body.staging.model_dump() if body.staging is not None else None,
+        "lock_staging": body.lock_staging,
         "music_path": body.music_path.strip(),
         "shots": shots,
     }
+    apply_staging(
+        draft,
+        style=body.style_preset,
+        prompt=basis,
+        supplied=body.staging,
+    )
     try:
         return PackIn.model_validate(draft)
     except ValidationError as exc:
@@ -293,6 +307,7 @@ def _shot_dict(shot: ShotFill) -> dict[str, object]:
         "video_mode": shot.video_mode or "image_to_video",
         "dialogue": shot.dialogue,
         "voice_id": shot.voice_id,
+        "stage": shot.stage.model_dump() if shot.stage is not None else None,
     }
 
 

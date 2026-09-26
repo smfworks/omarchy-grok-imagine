@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from omarchy_imagine.castref import ensure_cast_names
 from omarchy_imagine.config import (
@@ -50,12 +50,22 @@ from omarchy_imagine.schema import (
     CAMERA_ANGLES,
     CAMERA_MOVES,
     CAMERA_SCALES,
+    CAMERA_SIDES,
+    DEPTHS,
+    ENTITY_KINDS,
+    FACINGS,
+    SCREEN_X,
+    STAGE_GAPS,
+    STAGE_RELATIONS,
     STYLE_PRESETS,
+    TRAVELS,
     CastRef,
     LookBible,
     PackIn,
+    StagingMap,
     coerce_token,
 )
+from omarchy_imagine.staging import apply_staging
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
@@ -76,6 +86,8 @@ class PlanIn(BaseModel):
     title: str | None = None
     style_preset: str | None = None
     cast: list[CastRef] = Field(default_factory=list)
+    staging: StagingMap | None = None
+    lock_staging: bool = True
     music_path: str = ""
 
     @field_validator("prompt")
@@ -177,12 +189,96 @@ class StoryBeatDraft(BaseModel):
         return value.strip()
 
 
+class StoryBlock(BaseModel):
+    """Loose blocking from the text model. The server normalizes the enums."""
+
+    id: str = ""
+    x: str = ""
+    depth: str = ""
+    facing: str = ""
+    look: str = ""
+    travel: str = ""
+    visible: bool = True
+
+    @field_validator("id", "x", "depth", "facing", "look", "travel")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class StoryRelation(BaseModel):
+    a: str = ""
+    rel: str = ""
+    b: str = ""
+    gap: str = ""
+
+    @field_validator("a", "rel", "b", "gap")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class StoryEntity(BaseModel):
+    id: str = ""
+    label: str = ""
+    kind: str = ""
+    cast_id: str = ""
+    count: int = 1
+
+    @field_validator("id", "label", "kind", "cast_id")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class StoryScene(BaseModel):
+    id: str = ""
+    shot_ids: list[str] = Field(default_factory=list)
+    axis: str = ""
+    travel: str = ""
+    entities: list[StoryEntity] = Field(default_factory=list)
+    relations: list[StoryRelation] = Field(default_factory=list)
+
+    @field_validator("id", "axis", "travel")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class StoryStaging(BaseModel):
+    scenes: list[StoryScene] = Field(default_factory=list)
+
+
+class StoryStage(BaseModel):
+    scene_id: str = ""
+    camera_side: str = ""
+    cross_reason: str = ""
+    start: list[StoryBlock] = Field(default_factory=list)
+    end: list[StoryBlock] = Field(default_factory=list)
+    relations: list[StoryRelation] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def motivation_alias(cls, value: object) -> object:
+        if isinstance(value, dict) and "cross_reason" not in value and "cross_motivation" in value:
+            merged = dict(value)
+            merged["cross_reason"] = merged.pop("cross_motivation")
+            return merged
+        return value
+
+    @field_validator("scene_id", "camera_side", "cross_reason")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+
 class StoryShot(BaseModel):
     prompt_still: str
     prompt_motion: str
     end_state: str
     beat: str = ""
     camera: StoryCamera = Field(default_factory=StoryCamera)
+    stage: StoryStage = Field(default_factory=StoryStage)
 
     @field_validator("prompt_still", "prompt_motion", "end_state", "beat")
     @classmethod
@@ -197,6 +293,7 @@ class StoryDraft(BaseModel):
     style_preset: str = ""
     beat_map: list[StoryBeatDraft] = Field(default_factory=list)
     look_bible: LookBible = Field(default_factory=LookBible)
+    staging: StoryStaging = Field(default_factory=StoryStaging)
     shots: list[StoryShot]
 
     @field_validator("title", "logline", "opening_state", "style_preset")
@@ -381,6 +478,8 @@ def _heuristic_pack(
     for shot, duration in zip(draft["shots"], durations, strict=True):
         shot["duration_sec"] = duration
     apply_heuristic_craft(draft, style, prompt)
+    draft["lock_staging"] = body.lock_staging
+    apply_staging(draft, style=style, prompt=prompt, supplied=body.staging, rebuild=True)
     _soften_and_lock(draft)
     _mention_cast(draft, body)
     return _validate_pack(draft)
@@ -413,6 +512,8 @@ def _pack_from_story(
             raise PlanError(
                 f"Shot {index + 1} is missing a still prompt, a motion prompt, or an end state."
             )
+        raw_stage = item.stage.model_dump()
+        has_blocks = bool(raw_stage.get("start") or raw_stage.get("end"))
         shots.append(
             {
                 "id": f"s{index + 1:02d}",
@@ -421,6 +522,7 @@ def _pack_from_story(
                 "duration_sec": duration,
                 "start_state": "",
                 "end_state": end_state,
+                "stage": raw_stage if has_blocks else None,
             }
         )
     if not opening:
@@ -451,8 +553,16 @@ def _pack_from_story(
         "style_preset": style,
         "beat_map": beat_map,
         "look_bible": bible.model_dump(),
+        "lock_staging": body.lock_staging,
         "shots": shots,
     }
+    apply_staging(
+        draft,
+        style=style,
+        prompt=prompt,
+        supplied=body.staging,
+        model_staging=story.staging.model_dump(),
+    )
     _mention_cast(draft, body)
     return _validate_pack(draft)
 
@@ -613,8 +723,11 @@ def _messages(brief: PlanBrief) -> list[dict[str, str]]:
                 "The last shot is a readable button. "
                 "prompt_still is one locked frame: who, wardrobe, pose, space, and light. "
                 "No camera move in the still. "
-                "prompt_motion is only what changes, led by a verb, plus the one camera move "
-                "on the card. Do not write a mood essay. "
+                "One action and one camera move per shot. "
+                "prompt_motion restates each visible character's screen side, depth, and "
+                "facing, then the one change, led by a verb, plus the one camera move "
+                "on the card. Do not drop a position just because it did not change. "
+                "Do not write a mood essay. "
                 "look_bible locks the whole film: cast is the same face and body, "
                 "wardrobe is the same clothes, palette is the colors, lighting is the "
                 "key light, and camera is the film stock and lens for the style preset. "
@@ -626,6 +739,21 @@ def _messages(brief: PlanBrief) -> list[dict[str, str]]:
                 "When the user message lists named cast, use those names in every "
                 "prompt_still and every prompt_motion. "
                 "opening_state is the picture at the start of the first shot. "
+                "Before writing shots, block each scene: name every on-screen entity, "
+                "the axis of action, the travel direction, and which side the camera stays on. "
+                "Give each entity a screen third, depth, facing, and distance. "
+                "Restate those positions in every prompt_still and every prompt_motion. "
+                "Say screen-left or screen-right, not nearby. "
+                "A chase keeps the pursuers behind the pursued, traveling the same way. "
+                "Pursuers never ride beside or ahead unless that shot's stage says so. "
+                "A turn is a head or torso twist. Travel does not reverse. "
+                "For a turn to shoot, say which side he looks and aims, toward the pursuers, "
+                "while the horse keeps the same travel. "
+                "Keep the camera on one side of the line. Do not orbit, whip-pan across "
+                "the axis, or cut to a reverse over-the-shoulder. "
+                "If a shot must cross, set camera_side to cross and write cross_reason. "
+                "An on_axis shot looks straight along the line and may reset it. "
+                "end_state and stage.end describe the same blocking. The next shot starts there. "
                 "Keep the chain continuous. Write family-safe prose: no blood, gore, "
                 "death, or injury. A clash is bloodless choreography that ends in "
                 "exhaustion and victory. Do not include URLs."
@@ -647,6 +775,44 @@ def _story_schema(shot_count: int) -> dict[str, object]:
         },
         "required": ["scale", "angle", "move", "exit_frame"],
     }
+    block = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "id": {"type": "string"},
+            "x": {"type": "string", "enum": list(SCREEN_X)},
+            "depth": {"type": "string", "enum": list(DEPTHS)},
+            "facing": {"type": "string", "enum": list(FACINGS)},
+            "look": {"type": "string", "enum": ["", *FACINGS]},
+            "travel": {"type": "string", "enum": list(TRAVELS)},
+            "visible": {"type": "boolean"},
+        },
+        "required": ["id", "x", "depth", "facing", "look", "travel", "visible"],
+    }
+    relation = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "a": {"type": "string"},
+            "rel": {"type": "string", "enum": list(STAGE_RELATIONS)},
+            "b": {"type": "string"},
+            "gap": {"type": "string", "enum": ["", *STAGE_GAPS]},
+        },
+        "required": ["a", "rel", "b", "gap"],
+    }
+    stage = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "scene_id": {"type": "string"},
+            "camera_side": {"type": "string", "enum": ["", *CAMERA_SIDES]},
+            "cross_reason": {"type": "string"},
+            "start": {"type": "array", "items": block},
+            "end": {"type": "array", "items": block},
+            "relations": {"type": "array", "items": relation},
+        },
+        "required": ["scene_id", "camera_side", "cross_reason", "start", "end", "relations"],
+    }
     shot = {
         "type": "object",
         "additionalProperties": False,
@@ -656,8 +822,9 @@ def _story_schema(shot_count: int) -> dict[str, object]:
             "end_state": {"type": "string"},
             "beat": {"type": "string", "enum": list(BEAT_ROLES)},
             "camera": camera,
+            "stage": stage,
         },
-        "required": ["prompt_still", "prompt_motion", "end_state", "beat", "camera"],
+        "required": ["prompt_still", "prompt_motion", "end_state", "beat", "camera", "stage"],
     }
     beat = {
         "type": "object",
@@ -680,6 +847,39 @@ def _story_schema(shot_count: int) -> dict[str, object]:
         },
         "required": ["cast", "wardrobe", "palette", "lighting", "camera"],
     }
+    entity = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "id": {"type": "string"},
+            "label": {"type": "string"},
+            "kind": {"type": "string", "enum": list(ENTITY_KINDS)},
+            "cast_id": {"type": "string"},
+            "count": {"type": "integer"},
+        },
+        "required": ["id", "label", "kind", "cast_id", "count"],
+    }
+    scene = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "id": {"type": "string"},
+            "shot_ids": {"type": "array", "items": {"type": "string"}},
+            "axis": {"type": "string"},
+            "travel": {"type": "string", "enum": ["", *TRAVELS]},
+            "entities": {"type": "array", "items": entity},
+            "relations": {"type": "array", "items": relation},
+        },
+        "required": ["id", "shot_ids", "axis", "travel", "entities", "relations"],
+    }
+    staging = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "scenes": {"type": "array", "items": scene},
+        },
+        "required": ["scenes"],
+    }
     return {
         "type": "object",
         "additionalProperties": False,
@@ -695,6 +895,7 @@ def _story_schema(shot_count: int) -> dict[str, object]:
                 "items": beat,
             },
             "look_bible": bible,
+            "staging": staging,
             "shots": {
                 "type": "array",
                 "minItems": shot_count,
@@ -709,6 +910,7 @@ def _story_schema(shot_count: int) -> dict[str, object]:
             "style_preset",
             "beat_map",
             "look_bible",
+            "staging",
             "shots",
         ],
     }

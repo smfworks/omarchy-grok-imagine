@@ -270,7 +270,10 @@ def test_chat_completions_request_is_strict_json_and_not_imagine() -> None:
         "end_state",
         "beat",
         "camera",
+        "stage",
     ]
+    assert "staging" in schema["json_schema"]["schema"]["properties"]
+    assert "staging" in required
     assert shot_schema["properties"]["camera"]["required"] == [
         "scale",
         "angle",

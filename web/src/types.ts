@@ -41,6 +41,53 @@ export type CastRef = {
   image_path: string;
 };
 
+export type StageBlock = {
+  id: string;
+  x: string;
+  depth: string;
+  facing: string;
+  travel: string;
+  look: string;
+  visible: boolean;
+};
+
+export type StageRelation = {
+  a: string;
+  rel: string;
+  b: string;
+  gap: string;
+};
+
+export type StageEntity = {
+  id: string;
+  label: string;
+  kind: string;
+  cast_id: string;
+  count: number;
+};
+
+export type StagingScene = {
+  id: string;
+  shot_ids: string[];
+  axis: string;
+  travel: string;
+  entities: StageEntity[];
+  relations: StageRelation[];
+};
+
+export type StagingMap = {
+  scenes: StagingScene[];
+};
+
+export type ShotStage = {
+  scene_id: string;
+  camera_side: string;
+  cross_reason: string;
+  start: StageBlock[];
+  end: StageBlock[];
+  relations: StageRelation[];
+};
+
 export type ShotDraft = {
   id: string;
   prompt_still: string;
@@ -50,6 +97,7 @@ export type ShotDraft = {
   start_state: string;
   beat: string;
   camera: CameraCard;
+  stage: ShotStage | null;
   video_mode: string;
   dialogue: string;
   voice_id: string;
@@ -64,6 +112,8 @@ export type PackDraft = {
   style_preset: string;
   beat_map: StoryBeat[];
   cast: CastRef[];
+  staging: StagingMap | null;
+  lock_staging: boolean;
   music_path: string;
   shots: ShotDraft[];
 };
@@ -134,7 +184,7 @@ export type Job = {
 
 export const ASPECTS = ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"] as const;
 export const RESOLUTIONS = ["480p", "720p", "1080p"] as const;
-export const STYLE_PRESETS = ["generic", "action_duel", "quiet_drama", "trek"] as const;
+export const STYLE_PRESETS = ["generic", "action_duel", "quiet_drama", "trek", "chase"] as const;
 export const BEAT_ROLES = ["setup", "turn", "climax", "button"] as const;
 export const CAMERA_SCALES = ["wide", "medium", "close", "extreme_close"] as const;
 export const CAMERA_ANGLES = ["eye", "low", "high", "ots", "dutch"] as const;

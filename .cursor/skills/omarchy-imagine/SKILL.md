@@ -107,7 +107,7 @@ When `XAI_API_KEY` is set, prose comes from `grok-4.6` via `POST /v1/chat/comple
 
 Plan adds story structure and camera grammar. A hand-written pack may omit them: empty `style_preset`, an empty `beat_map`, an empty shot `beat`, and an empty shot `camera` are valid. `POST /api/packs/fill` keeps craft fields you already set and does not invent a beat map.
 
-`style_preset` is `generic`, `action_duel`, `quiet_drama`, or `trek`. Send it on the plan request to force one. Omit it and the server infers one from the prompt, or uses `generic`.
+`style_preset` is `generic`, `action_duel`, `quiet_drama`, `trek`, or `chase`. Send it on the plan request to force one. Omit it and the server infers one from the prompt, or uses `generic`. A chase (chase, pursuit, bandits, gallop) keeps pursuers behind the lead.
 
 `beat_map` is `{role, summary}` lines in story order. Roles are `setup`, `turn`, `climax`, and `button`. The map is not equal filler. Two shots are setup then button. Three are setup, climax, button. Longer plans keep one setup and one button and split the middle between turn and climax.
 
@@ -118,7 +118,9 @@ Each shot adds `beat` and `camera`:
 - `move`: one of `static`, `dolly_in`, `dolly_out`, `orbit`, `pan`, `tilt`, `whip_pan`, `handheld`. One move per shot.
 - `exit_frame`: the picture the next shot opens on. `end_state` matches it on a heuristic plan, and the next `start_state` copies that line, so a last-frame edit starts clean.
 
-`prompt_still` stays a locked frame (who, wardrobe, pose, space, light) with no camera move. `prompt_motion` is only what changes, verb-led, plus that one move. Look-bible anchors are repeated lightly in both. `look_bible.camera` stays the lens and grade. The shot card is the grammar. Violent wording is softened at plan time. Durations still come from the ~8 second shot math. A later beat is shorter only when that split already makes it shorter. The draft has no media URLs.
+`prompt_still` stays a locked frame (who, wardrobe, pose, space, light) with no camera move. `prompt_motion` restates screen side, depth, and facing, then one action and one camera move. A turn is a torso twist. Travel does not reverse. Look-bible anchors are repeated lightly in both. `look_bible.camera` stays the lens and grade. The shot card is the grammar. The planner does not assign `orbit`, `whip_pan`, or a reverse over-the-shoulder unless the shot is marked `camera_side: cross` with a `cross_reason`. Violent wording is softened at plan time. Durations still come from the ~8 second shot math. A later beat is shorter only when that split already makes it shorter. The draft has no media URLs.
+
+`staging` on the plan request and response is the scene map (`scenes[]` with `entities`, `axis`, `travel`, `relations`). Each shot may include `stage` (`camera_side`, `cross_reason`, `start[]`, `end[]`). `cast` is also accepted on `POST /api/packs/plan` and returned on the draft. Omit both and an old pack still loads. `lock_staging` defaults to true and injects the staging clause into still, edit, and motion prompts. `cross_motivation` is accepted as an alias of `cross_reason`.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8010/api/packs/plan \
@@ -173,7 +175,7 @@ curl -s -X POST http://127.0.0.1:8010/api/packs/preflight \
 
 Read `shots[].still_prompt` and `shots[].motion_prompt`. Those are the strings the run will send, built by the same prompt builders as the pipeline. When ffmpeg is available, each shot after the first is seeded, and the still prompt adds `seed frame is the previous clip's last frame at run time`. `still_mode_expected` is `text_to_image`, `cast_reference`, or `last_frame_edit`. `totals` is still calls, video calls, and video seconds (for example `4 stills, 4 videos, 32 s of video`). There is no dollar price.
 
-If `blocking` is true, fix every `handoff_state` issue before you run. `verb_count`, `camera_conflict`, `banned_cut`, and `lock_drift` are warnings. `r2v_resolution` is a note that a `1080p` pack will send `reference_to_video` at `720p`. Warnings do not stop the run.
+If `blocking` is true, fix every `handoff_state`, `side_flip`, `travel_flip`, `relation_violation`, and `stage_handoff` issue before you run. `verb_count`, `camera_conflict`, `banned_cut`, `lock_drift`, `line_risk_camera`, `r2v_no_anchor`, `stage_missing`, and `clause_missing` are warnings. `r2v_resolution` and `vague_position` are notes. Warnings do not stop the run. `r2v_no_anchor` means a reference-to-video shot in a multi-entity scene has no composed first frame.
 
 Do not call the run route until you have read this response.
 

@@ -66,9 +66,10 @@ def test_seeded_still_prompt_locks_the_source_frame() -> None:
     assert "same body type" in seeded
     assert "same clothes" in seeded
     assert "same color grade and lighting" in seeded
-    assert "Only pose, blocking, and action may change" in seeded
+    assert "Only pose and action may change" in seeded
+    assert "same side of frame" in seeded
     assert "Locked end state:" in seeded
-    assert "Only pose, blocking, and action may change" not in plain
+    assert "Only pose and action may change" not in plain
     contract = "Keep the same face, the same body type, the same clothes"
     assert contract in seeded
     assert contract not in plain
@@ -242,9 +243,10 @@ def test_grade_match_failure_still_stitches(client, app, monkeypatch, tmp_path) 
             assert "The same fisher" in body["prompt"]
             if path.endswith("/images/edits"):
                 assert "same face" in body["prompt"]
-                assert "Only pose, blocking, and action may change" in body["prompt"]
+                assert "Only pose and action may change" in body["prompt"]
+                assert "same side of frame" in body["prompt"]
             else:
-                assert "Only pose, blocking, and action may change" not in body["prompt"]
+                assert "Only pose and action may change" not in body["prompt"]
             return httpx.Response(
                 200,
                 json={"data": [{"b64_json": base64.b64encode(PNG_BYTES).decode("ascii")}]},

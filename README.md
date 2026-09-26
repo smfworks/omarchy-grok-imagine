@@ -100,15 +100,17 @@ The JSON that comes back is a valid `POST /api/packs` body.
 
 Simple mode in the wizard is one story prompt, an overall length, and aspect and resolution. **Plan** asks `POST /api/packs/plan` for a full pack draft and loads it into the shot editor. **Run** then behaves as it does today: fill any field that is still blank, create the pack, and start the job. Planning is text only. It does not call Imagine, and the honesty gates stay false until a run actually does that work. Advanced mode keeps the full shot editor and **Fill blanks from logline**.
 
-`POST /api/packs/plan` accepts `{prompt, target_duration_sec, aspect_ratio?, resolution?, title?, style_preset?}`. The response is a pack draft valid for `POST /api/packs`: title, logline, aspect, resolution, `look_bible`, `style_preset`, `beat_map`, and shots with `id`, `prompt_still`, `prompt_motion`, `duration_sec`, `start_state`, `end_state`, `beat`, and `camera`. It does not save the pack, call Imagine, or add media URLs. The same bearer token as the other pack routes is required.
+`POST /api/packs/plan` accepts `{prompt, target_duration_sec, aspect_ratio?, resolution?, title?, style_preset?, cast?, staging?, lock_staging?}`. `cast` and `staging` are optional and are returned on the draft so another app can pass them through. The response is a pack draft valid for `POST /api/packs`: title, logline, aspect, resolution, `look_bible`, `style_preset`, `beat_map`, `cast`, `staging`, `lock_staging`, and shots with `id`, `prompt_still`, `prompt_motion`, `duration_sec`, `start_state`, `end_state`, `beat`, `camera`, and `stage`. It does not save the pack, call Imagine, or add media URLs. The same bearer token as the other pack routes is required.
 
-`style_preset` is optional. `generic`, `action_duel`, `quiet_drama`, and `trek` are the presets. Omit it and the server infers one from the prompt, or uses `generic`. A hand-written pack may leave `style_preset` empty, `beat_map` empty, and each shot `beat` and `camera` empty. Fill blanks keeps those fields when you already set them and does not invent a beat map.
+`style_preset` is optional. `generic`, `action_duel`, `quiet_drama`, `trek`, and `chase` are the presets. Omit it and the server infers one from the prompt, or uses `generic`. A chase is inferred from words such as chase, pursuit, bandits, or gallop. A hand-written pack may leave `style_preset` empty, `beat_map` empty, `staging` empty, and each shot `beat`, `camera`, and `stage` empty. Those packs still load and run. Fill blanks keeps craft fields you already set.
 
 ### Director craft
 
 Plan writes a beat map and a camera card so the shots are a story, not equal filler. Roles are `setup`, `turn`, `climax`, and `button`. Two shots are setup then button. Three are setup, climax, button. Longer plans keep one setup and one button and put the extra shots into turn, then climax.
 
-Each shot `camera` card is one scale (`wide`, `medium`, `close`, `extreme_close`), one angle (`eye`, `low`, `high`, `ots`, `dutch`), one move (`static`, `dolly_in`, `dolly_out`, `orbit`, `pan`, `tilt`, `whip_pan`, `handheld`), and an `exit_frame`. Scales alternate on purpose. A four-shot generic plan is wide, then medium, then close, then wide. Dutch is used at most once, and only on an action-duel climax. The still prompt is a locked frame: who, wardrobe, pose, space, and light, with no camera move. The motion prompt is only what changes, led by a verb, plus that one move. Look-bible anchors are repeated lightly in both lines. `look_bible.camera` stays the lens and grade. The shot card is the grammar for that clip.
+Each shot `camera` card is one scale (`wide`, `medium`, `close`, `extreme_close`), one angle (`eye`, `low`, `high`, `ots`, `dutch`), one move (`static`, `dolly_in`, `dolly_out`, `orbit`, `pan`, `tilt`, `whip_pan`, `handheld`), and an `exit_frame`. Scales alternate on purpose. A four-shot generic plan is wide, then medium, then close, then wide. Dutch is used at most once, and only on an action-duel climax. The planner does not assign `orbit`, `whip_pan`, or a reverse over-the-shoulder. Those cross the line of action unless the shot sets `camera_side` to `cross` and gives a `cross_reason`. The still prompt is a locked frame: who, wardrobe, pose, space, and light, with no camera move. The motion prompt restates each figure's screen side, depth, and facing, then one action and the one camera move. A turn is a torso twist, not a reversal of travel. Look-bible anchors are repeated lightly in both lines. `look_bible.camera` stays the lens and grade. The shot card is the grammar for that clip.
+
+`staging` is the scene map: entities, the axis of action, travel, and default relations such as bandits behind, far. Each shot `stage` is the blocking at the first frame and the last: screen third, depth, facing, look, travel, visibility, `camera_side`, and `cross_reason` when a side changes. Shot N `stage.start` copies shot N-1 `stage.end`. When `lock_staging` is true (the default), the server injects a staging clause and negative locks such as "Nobody rides beside" into every still, edit, and motion prompt. The wizard shows a read-only stage strip per shot and one Lock staging toggle. Users do not fill the enums. The field list is in `docs/staging.schema.json`.
 
 `exit_frame` names the picture the next shot should open on. On a heuristic plan it matches `end_state`, and the next `start_state` copies it, so a last-frame edit starts clean. The text model is asked for the same card. The server keeps the card it requested and keeps a model exit frame when one is present. Violent wording is softened before the draft is returned. Durations are unchanged: a later beat is shorter only when the even split already makes that clip shorter.
 
@@ -149,6 +151,15 @@ Issues use `block`, `warn`, or `info`:
 | `handoff_state` | block | Shot N `start_state` is not shot N-1 `end_state` after strip |
 | `lock_drift` | warn | A look-bible or cast anchor word is missing from that shot's still prompt |
 | `r2v_resolution` | info | A `1080p` pack will send `reference_to_video` at `720p` |
+| `side_flip` | block | An entity switches screen side, or `camera_side` is `cross`, without `cross_reason` |
+| `travel_flip` | block | Travel reverses (screen-left against screen-right) without `cross_reason` |
+| `relation_violation` | block | A `behind` relation is not upstream of travel, or the gap is touching without a contact beat |
+| `stage_handoff` | block | Shot N `stage.start` is not shot N-1 `stage.end` |
+| `line_risk_camera` | warn | `orbit`, `whip_pan`, or a reverse `ots` in a multi-entity scene that stays on the same side of the line |
+| `r2v_no_anchor` | warn | `reference_to_video` in a scene with two or more entities, so the still is not the first frame |
+| `stage_missing` | warn | Two or more entities and the shot has no stage |
+| `clause_missing` | warn | Lock staging is on and the assembled prompt has no staging clause |
+| `vague_position` | info | Pursuit prose says near, next to, alongside, or beside |
 
 `blocking` is true when any issue is `block`. Warnings and the resolution note do not block. A continuity mismatch that is already written on both sides is still `422` from the pack schema, the same as create. A one-sided gap is a preflight block, with a message on that shot.
 

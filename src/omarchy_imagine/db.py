@@ -381,6 +381,8 @@ class Store:
             "style_preset": body.get("style_preset") or "",
             "beat_map": body.get("beat_map") or [],
             "cast": body.get("cast") or [],
+            "staging": body.get("staging"),
+            "lock_staging": body.get("lock_staging", True),
             "music_path": body.get("music_path") or "",
             "shots": body["shots"],
             "created_at": created_at,

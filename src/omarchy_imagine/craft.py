@@ -55,6 +55,16 @@ _QUIET_WORDS = (
     "letter",
     "unspoken",
 )
+_CHASE_WORDS = (
+    "chase",
+    "pursuit",
+    "pursued",
+    "posse",
+    "bandits",
+    "outlaws",
+    "fleeing",
+    "gallop",
+)
 
 _LENS = {
     "generic": (
@@ -71,6 +81,10 @@ _LENS = {
     ),
     "trek": (
         "Anamorphic widescreen, cool practical lights, one grade, "
+        "no flicker and no lens change between shots."
+    ),
+    "chase": (
+        "35mm, anamorphic flare, one grade, "
         "no flicker and no lens change between shots."
     ),
 }
@@ -110,8 +124,8 @@ _MOVE_TABLE: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "action_duel": {
         "setup": ("dolly_in",),
-        "turn": ("handheld", "orbit", "pan"),
-        "climax": ("whip_pan", "handheld", "orbit"),
+        "turn": ("handheld", "pan"),
+        "climax": ("dolly_in", "handheld", "pan"),
         "button": ("static",),
     },
     "quiet_drama": {
@@ -123,8 +137,14 @@ _MOVE_TABLE: dict[str, dict[str, tuple[str, ...]]] = {
     "trek": {
         "setup": ("dolly_in",),
         "turn": ("pan", "tilt"),
-        "climax": ("dolly_in", "orbit"),
-        "button": ("orbit",),
+        "climax": ("dolly_in", "pan"),
+        "button": ("pan",),
+    },
+    "chase": {
+        "setup": ("pan",),
+        "turn": ("pan", "dolly_in"),
+        "climax": ("dolly_in",),
+        "button": ("static",),
     },
 }
 
@@ -137,9 +157,18 @@ _POSE = {
     },
     "action_duel": {
         "setup": "takes a ready stance for a choreographed duel and stays unharmed",
-        "turn": "changes the duel line and meets the other figure",
+        "turn": "shifts the momentum and stays on the same ground",
         "climax": "lands the last rehearsed exchange, exhausted and unharmed",
         "button": "holds the victory still, and both figures stay unharmed",
+    },
+    "chase": {
+        "setup": "rides hard toward screen-right with the pursuers far behind on the left",
+        "turn": "keeps riding screen-right while the pursuers close from behind on the left",
+        "climax": (
+            "twists in the saddle and aims back toward screen-left, "
+            "while the horse keeps traveling screen-right"
+        ),
+        "button": "breaks away toward screen-right as the pursuers fall back on the left",
     },
     "quiet_drama": {
         "setup": "stands in the quiet with one clear want and does not speak it yet",
@@ -164,9 +193,18 @@ _POSE_END = {
     },
     "action_duel": {
         "setup": "both figures on their marks, unharmed, the duel not yet begun",
-        "turn": "the duel line reversed, both figures unharmed",
+        "turn": "the momentum shifted, both figures unharmed and still on their own side",
         "climax": "the last exchange finished, exhaustion and a readable victory",
         "button": "the victor holding still, everyone unharmed",
+    },
+    "chase": {
+        "setup": "the lead riding screen-right, pursuers far behind on the left",
+        "turn": "the pursuers closer behind on the left, travel still screen-right",
+        "climax": (
+            "the lead twisted back toward screen-left, horse still traveling screen-right, "
+            "pursuers behind on the left"
+        ),
+        "button": "the lead small toward screen-right, pursuers halted behind on the left",
     },
     "quiet_drama": {
         "setup": "the figure still in the quiet, the want not yet spoken",
@@ -191,9 +229,26 @@ _ACTION = {
     },
     "action_duel": {
         "setup": "Steps onto the mark and raises a ready stance",
-        "turn": "Changes the duel line and meets the other figure",
+        "turn": "Shifts the momentum of the exchange and stays on the same ground",
         "climax": "Lands the last rehearsed exchange and shows the victory",
         "button": "Holds the victory still",
+    },
+    "chase": {
+        "setup": (
+            "Rides hard toward screen-right on the right third, "
+            "with the pursuers far behind on the left third"
+        ),
+        "turn": (
+            "Keeps traveling screen-right while the pursuers close the gap "
+            "from behind on the left third"
+        ),
+        "climax": (
+            "Twists in the saddle and aims back toward screen-left at the pursuers, "
+            "while travel stays screen-right"
+        ),
+        "button": (
+            "Breaks away toward screen-right and the pursuers fall back, halted on the left"
+        ),
     },
     "quiet_drama": {
         "setup": "Steps into the quiet and shows the want without a speech",
@@ -221,7 +276,7 @@ _SUMMARY = {
             "Setup. Want: {story}. Obstacle: the other figure holds the ground. "
             "Choreography only."
         ),
-        "turn": "Turn. The duel line changes. The emotion reverses. Nobody is harmed.",
+        "turn": "Turn. The momentum shifts. The emotion reverses. Nobody changes sides.",
         "climax": (
             "Climax. The last rehearsed exchange of {story}. Exhaustion, then a readable victory."
         ),
@@ -238,6 +293,21 @@ _SUMMARY = {
         "turn": "Turn. The bridge problem turns. The crew commits to a new course.",
         "climax": "Climax. The hardest order in {story}. The outcome has to read on the faces.",
         "button": "Button. The ship holds. The ending is one readable picture.",
+    },
+    "chase": {
+        "setup": (
+            "Setup. Want: {story}. Obstacle: the pursuers are behind. "
+            "Travel stays one direction."
+        ),
+        "turn": (
+            "Turn. The pursuers close the gap from behind. "
+            "A turn is a torso twist, not a reversal."
+        ),
+        "climax": (
+            "Climax. The lead twists and aims back toward the pursuers in {story}. "
+            "Travel does not reverse."
+        ),
+        "button": "Button. The lead breaks away. The pursuers fall back. One held picture.",
     },
 }
 
@@ -256,8 +326,13 @@ def lens_line(style: str) -> str:
 
 
 def infer_style(prompt: str) -> str:
-    """Pick a preset from the story. ``generic`` when nothing in the prompt matches."""
+    """Pick a preset from the story. ``generic`` when nothing in the prompt matches.
+
+    A chase wins over a duel so pursuit language does not flip the line of action.
+    """
     low = prompt.lower()
+    if _score(low, _CHASE_WORDS):
+        return "chase"
     scores = {
         "action_duel": _score(low, _ACTION_WORDS),
         "trek": _score(low, _TREK_WORDS),
@@ -462,8 +537,10 @@ def _angles(beats: list[str], style: str) -> list[str]:
             choice = "low"
         elif style == "action_duel" and beat == "climax":
             choice = "high" if climax_index == 1 else "low"
+        elif style == "chase" and beat == "turn":
+            choice = "low"
         elif style in {"action_duel", "trek"} and beat == "turn":
-            choice = "ots" if turn_index % 2 == 0 else "eye"
+            choice = "low" if turn_index % 2 == 0 else "eye"
             turn_index += 1
         elif style == "trek" and beat == "climax":
             choice = "low"

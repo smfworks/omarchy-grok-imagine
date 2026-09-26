@@ -7,7 +7,8 @@ Continuity when ffmpeg is on PATH (``last_frame_edit``):
 3. ffmpeg extracts the clip's last frame.
 4. The next still is an image edit (``POST /v1/images/edits``) seeded by that frame.
    The edit prompt keeps the look bible and the source frame's face, clothes,
-   and grade. Only pose, blocking, and action may change.
+   and grade. Only pose and action may change. Blocking stays unless the
+   shot's staging lines name a motivated change.
 5. Every image-to-video prompt repeats the look bible and tells the model to
    animate that still without changing costume, hair, identity, or lighting.
 6. Before concat, ffmpeg may soft-match later clips toward clip 1. A missing
@@ -47,7 +48,8 @@ from omarchy_imagine.db import ReviseRejected, Store, aggregate_gates, utcnow
 from omarchy_imagine.ffmpeg_util import FfmpegError, FfmpegNotFound
 from omarchy_imagine.imagine import ImagineClient, ImagineError
 from omarchy_imagine.moderate import MAX_MODERATION_RETRIES, soften_prompts
-from omarchy_imagine.schema import render_look_bible
+from omarchy_imagine.schema import PackIn, render_look_bible
+from omarchy_imagine.staging import staging_clause
 
 logger = logging.getLogger("omarchy_imagine")
 
@@ -127,8 +129,9 @@ SEEDED_STILL_CONTRACT = (
     "Use the provided frame as the exact visual source. "
     "Keep the same face, the same body type, the same clothes, "
     "and the same color grade and lighting as that source frame. "
-    "Only pose, blocking, and action may change, and only as the still prompt "
-    "and the locked end state require."
+    "Only pose and action may change. "
+    "Keep every character on the same side of frame, at the same relative depth, "
+    "facing the same way as the source frame, unless the staging lines below say otherwise."
 )
 
 MOTION_SEED_LOCK = (
@@ -145,6 +148,7 @@ def build_still_prompt(
     look_bible: str = "",
     cast: list[dict[str, Any]] | None = None,
     image_note: str = "",
+    pack: PackIn | dict[str, Any] | None = None,
 ) -> str:
     parts: list[str] = []
     bible = look_bible.strip()
@@ -155,6 +159,9 @@ def build_still_prompt(
         parts.append(lock)
     if seeded:
         parts.append(SEEDED_STILL_CONTRACT)
+    clause = staging_clause(pack, shot, "still") if pack is not None else ""
+    if clause:
+        parts.append(clause)
     note = image_note.strip()
     if note:
         parts.append(note)
@@ -172,6 +179,7 @@ def build_motion_prompt(
     look_bible: str = "",
     cast: list[dict[str, Any]] | None = None,
     reference_note: str = "",
+    pack: PackIn | dict[str, Any] | None = None,
 ) -> str:
     parts: list[str] = []
     bible = look_bible.strip()
@@ -180,10 +188,16 @@ def build_motion_prompt(
     lock = cast_lock_line(list(cast or []))
     if lock:
         parts.append(lock)
+    clause = staging_clause(pack, shot, "motion") if pack is not None else ""
+    if clause:
+        parts.append(clause)
     note = reference_note.strip()
     if note:
         parts.append(note)
     parts.append(MOTION_SEED_LOCK)
+    start = str(shot.get("start_state") or "").strip()
+    if start:
+        parts.append(f"Locked start state: {start}")
     motion = str(shot.get("prompt_motion") or "").strip()
     if motion:
         parts.append(motion)
@@ -194,6 +208,9 @@ def build_motion_prompt(
             parts.append(f'Spoken line, voice <AUDIO_0> ({voice}): "{dialogue}"')
         else:
             parts.append(f'Spoken line: "{dialogue}"')
+    end = str(shot.get("end_state") or "").strip()
+    if end:
+        parts.append(f"By the last second: {end}")
     return "\n\n".join(parts)
 
 
@@ -325,6 +342,7 @@ def _render_shot(
             look_bible=look_bible,
             cast=list(pack.get("cast") or []),
             image_note=image_note,
+            pack=pack,
         )
         reference_note = ""
         if shot.get("video_mode") == "reference_to_video":
@@ -334,6 +352,7 @@ def _render_shot(
             look_bible=look_bible,
             cast=list(pack.get("cast") or []),
             reference_note=reference_note,
+            pack=pack,
         )
         try:
             if still_sources is None:
